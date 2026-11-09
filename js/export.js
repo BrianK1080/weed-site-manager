@@ -46,6 +46,7 @@ export function sitesCSV(data) {
       occurrenceRemarks: site.access_notes || '',
       locality: site.location_id || '',
       archived: site.archived ? 'yes' : '',
+      deleted: site.deleted ? 'yes' : '',
       site_name: site.name,
       geometry_type: site.geometry ? site.geometry.type : '',
       size: site.size_value != null ? `${site.size_value} ${site.size_unit || ''}`.trim() : '',

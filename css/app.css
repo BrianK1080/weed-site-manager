@@ -167,3 +167,7 @@ th, td { text-align: left; padding: 6px; border-bottom: 1px solid var(--line); w
 
 .archived { margin-top: 16px; border-top: 1px solid var(--line); padding-top: 8px; }
 .archived summary { font-weight: 700; color: var(--muted); cursor: pointer; padding: 6px 0; }
+.map-btn { background: #fff; border: 2px solid rgba(0,0,0,.2); border-radius: 6px; padding: 4px 8px; min-height: 0; font-size: 13px; font-weight: 600; margin-bottom: 6px !important; }
+.map-btn.on { background: var(--green); color: #fff; }
+.bd-label { color: #fff; font-size: 12px; font-weight: 700; text-shadow: 0 0 3px #000, 0 0 3px #000; white-space: nowrap; }
+.leaflet-control-attribution { max-width: 58vw; font-size: 10px !important; line-height: 1.3; }

@@ -19,6 +19,8 @@ const HOME = [-37.585, 145.385]; // Steels Creek, Yarra Valley
 const AMBER = '#ffab00';
 const GREY = '#9e9e9e';
 const COLLAPSE_ZOOM = 15;
+// Vicmap Property parcels (open data, CC BY). Approximate: not a survey or legal title boundary.
+const PARCELS_WMS = { url: 'https://opendata.maps.vic.gov.au/geoserver/wms', opts: { layers: 'open-data-platform:parcel_view', format: 'image/png', transparent: true, minZoom: 15, maxZoom: 21, attribution: 'Parcels &copy; Vicmap (State of Victoria), CC BY' } };
 const PALETTE = ['#ff6d00', '#6a1b9a', '#00897b', '#c0ca33', '#5d4037', '#d81b60', '#3949ab', '#7cb342', '#f4511e', '#00acc1'];
 
 const METHODS = { chip: 'Chip / dig', cut: 'Cut', pull: 'Hand-pull', spot_spray: 'Spot spray', wipe: 'Wipe / paint', inspect: 'Inspect only (no treatment)', other: 'Other' };
@@ -29,14 +31,14 @@ const STATUS_TEXT = { due: 'Due now', untreated: 'Not treated this season', trea
 
 /* ---------- state ---------- */
 const S = {
-  species: {}, sites: [], visits: [], routes: [], settings: { id: 'settings', operator: '', basemap: 'sat', lastBackup: null },
+  species: {}, sites: [], visits: [], routes: [], boundaries: [], settings: { id: 'settings', operator: '', basemap: 'sat', lastBackup: null },
   hidden: new Set(), locFilter: '', pos: null, follow: false, draw: null, tab: 'map', routeFilter: '', showAllToday: false,
 };
-let map, baseLayers = [], siteLayer, posMarker, accCircle, drawLayer;
+let map, baseLayers = [], parcelLayer = null, boundaryLayer, siteLayer, posMarker, accCircle, drawLayer;
 
 const $ = sel => document.querySelector(sel);
 const h = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const live = () => S.sites.filter(s => !s.archived); // archived sites stay out of the map, Today and routes
+const live = () => S.sites.filter(s => !s.archived && !s.deleted); // archived sites stay out of the map, Today and routes
 const spList = () => Object.values(S.species).sort((a, b) => a.common_name.localeCompare(b.common_name));
 const statusOf = site => siteStatus(site, S.species[site.species_id], S.visits);
 const fmtDate = iso => iso ? new Date(iso).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' }) : '';
@@ -83,6 +85,7 @@ async function load() {
   S.routes = (await db.all('routes')).sort((a, b) => a.name.localeCompare(b.name));
   const settings = await db.get('meta', 'settings');
   if (settings) S.settings = { ...S.settings, ...settings };
+  S.boundaries = (await db.get('meta', 'boundaries'))?.list || [];
 }
 const saveSettings = () => db.put('meta', S.settings);
 
@@ -171,8 +174,16 @@ function setBasemap(key) {
 function initMap() {
   map = L.map('map', { zoomControl: false, attributionControl: true }).setView(HOME, 14);
   L.control.zoom({ position: 'bottomright' }).addTo(map);
+  map.attributionControl.setPrefix(false); // Leaflet credited under More > About
   setBasemap(BASEMAPS[S.settings.basemap] ? S.settings.basemap : 'sat');
+  boundaryLayer = L.layerGroup().addTo(map);
   siteLayer = L.layerGroup().addTo(map);
+  const Ctl = L.Control.extend({ options: { position: 'bottomleft' }, onAdd() {
+    const b = L.DomUtil.create('button', 'map-btn'); b.id = 'btn-parcels'; b.type = 'button'; b.textContent = 'Boundaries'; b.title = 'Show property boundaries';
+    L.DomEvent.disableClickPropagation(b); L.DomEvent.on(b, 'click', () => setParcels(!S.settings.parcels)); return b; } });
+  new Ctl().addTo(map);
+  if (S.settings.parcels) setParcels(true);
+  renderBoundaries();
   drawLayer = L.layerGroup().addTo(map);
   map.on('zoomend', renderSites);
   map.on('moveend', renderLegend);
@@ -180,6 +191,26 @@ function initMap() {
   map.on('dragstart', () => { if (S.follow) { S.follow = false; $('#btn-locate').classList.remove('on'); } });
   if (S.sites.length) fitAll();
 }
+
+function setParcels(on) {
+  S.settings.parcels = on;
+  saveSettings();
+  if (on && !parcelLayer) parcelLayer = L.tileLayer.wms(PARCELS_WMS.url, PARCELS_WMS.opts);
+  if (on) { parcelLayer.addTo(map); if (map.getZoom() < 15) toast('Zoom in closer to see property boundaries.'); }
+  else if (parcelLayer) map.removeLayer(parcelLayer);
+  const b = document.getElementById('btn-parcels'); if (b) b.classList.toggle('on', on);
+}
+
+function renderBoundaries() {
+  boundaryLayer.clearLayers();
+  for (const bd of S.boundaries) {
+    const ll = bd.geometry.coordinates[0].map(p => [p[1], p[0]]);
+    L.polygon(ll, { color: '#fff', weight: 2.5, dashArray: '10 6', fill: false, interactive: false }).addTo(boundaryLayer);
+    L.polygon(ll, { color: '#000', weight: 1, opacity: 0.5, dashArray: '10 6', fill: false, interactive: false }).addTo(boundaryLayer);
+    if (bd.name) L.marker(ll[0], { interactive: false, icon: L.divIcon({ className: 'bd-label', html: h(bd.name), iconSize: [140, 16], iconAnchor: [0, 16] }) }).addTo(boundaryLayer);
+  }
+}
+const saveBoundaries = () => db.put('meta', { id: 'boundaries', list: S.boundaries });
 
 function fitAll() {
   const pts = live().map(siteLatLng).filter(Boolean);
@@ -226,7 +257,7 @@ function updateDrawBar() {
   const bar = $('#drawbar');
   if (!d) { bar.hidden = true; drawLayer.clearLayers(); return; }
   bar.hidden = false;
-  const what = d.type === 'point' ? 'Tap the map where the weeds are' : `${d.type === 'line' ? 'Line' : 'Area'}: tap the map to add points anywhere (you don't need to be there), or "Add GPS point" to add where you're standing (${d.pts.length} points)`;
+  const what = d.boundary ? `Boundary: tap each corner of the property (${d.pts.length} points), then Finish` : d.type === 'point' ? 'Tap the map where the weeds are' : `${d.type === 'line' ? 'Line' : 'Area'}: tap the map to add points anywhere (you don't need to be there), or "Add GPS point" to add where you're standing (${d.pts.length} points)`;
   $('#draw-msg').textContent = what;
   $('#draw-gps').hidden = d.type === 'point';
   $('#draw-undo').hidden = d.type === 'point';
@@ -256,8 +287,10 @@ function finishDraw() {
   else if (d.type === 'line') geometry = { type: 'LineString', coordinates: c };
   else geometry = { type: 'Polygon', coordinates: [[...c, c[0]]] };
   const pending = S.draw.editId;
+  const isBoundary = S.draw.boundary;
   S.draw = null;
   updateDrawBar();
+  if (isBoundary) { boundaryForm(geometry); return; }
   if (pending) {
     const site = S.sites.find(s => s.id === pending);
     site.geometry = geometry;
@@ -267,6 +300,20 @@ function finishDraw() {
   } else {
     siteForm(null, geometry);
   }
+}
+
+function boundaryForm(geometry) {
+  openSheet('Name this boundary', `<form id="bd-form"><label>Name <input name="name" placeholder="e.g. Home block, Lot 2" autocomplete="off"></label>
+    <p class="muted small">Your own approximate boundary, drawn for reference only.</p>
+    <div class="btns"><button class="primary" type="submit">Save boundary</button></div></form>`);
+  $('#bd-form').addEventListener('submit', async e => {
+    e.preventDefault();
+    S.boundaries.push({ id: uid('bd'), name: new FormData(e.target).get('name').trim(), geometry, created_at: new Date().toISOString() });
+    await saveBoundaries();
+    renderBoundaries();
+    toast('Boundary saved');
+    renderMore();
+  });
 }
 
 /* ---------- sheet ---------- */
@@ -305,7 +352,7 @@ function siteRow(site, extra = '') {
   return `<div class="row" data-action="open-site" data-id="${site.id}">
     <span class="row-sym">${pointSVG(sp.colour, st.status)}</span>
     <span class="row-main"><b>${h(site.name)}</b><small>${h(sp.common_name)} · ${h(site.location_id || TENURE[site.tenure] || '')}</small><small>${last}${d != null ? ' · ' + fmtDist(d) : ''}</small></span>
-    <span class="row-side">${site.archived ? '<span class="badge b-monitoring">Archived</span>' : badge(st.status)}${extra}</span></div>`;
+    <span class="row-side">${site.deleted ? '<span class="badge b-untreated">Deleted</span>' : site.archived ? '<span class="badge b-monitoring">Archived</span>' : badge(st.status)}${extra}</span></div>`;
 }
 
 const routeOptions = (sel, allLabel = 'All sites') => `<option value="">${allLabel}</option>${S.routes.map(r => `<option value="${r.id}" ${sel === r.id ? 'selected' : ''}>${h(r.name)}</option>`).join('')}`;
@@ -346,8 +393,9 @@ function renderSiteList(filterText = '') {
   let all = S.sites.filter(s => !S.routeFilter || s.route_id === S.routeFilter)
     .filter(s => !S.locFilter || s.location_id === S.locFilter)
     .filter(s => !q || (s.location_id || '').toLowerCase().includes(q) || s.name.toLowerCase().includes(q) || (S.species[s.species_id]?.common_name || '').toLowerCase().includes(q));
-  const archived = all.filter(s => s.archived).sort((a, b) => a.name.localeCompare(b.name));
-  let list = all.filter(s => !s.archived);
+  const archived = all.filter(s => s.archived && !s.deleted).sort((a, b) => a.name.localeCompare(b.name));
+  const deleted = all.filter(s => s.deleted).sort((a, b) => (b.deleted_at || '').localeCompare(a.deleted_at || ''));
+  let list = all.filter(s => !s.archived && !s.deleted);
   sortForRoute(list);
   const reorder = !!S.routeFilter;
   const html = `<div class="controls"><input type="search" placeholder="Search sites or weeds" value="${h(filterText)}" data-action="site-search">
@@ -357,7 +405,8 @@ function renderSiteList(filterText = '') {
     ${reorder ? '<p class="muted">Use the arrows to set the visit order for this route.</p>' : ''}
     ${list.length ? list.map((s, i) => siteRow(s, reorder ? `<span class="arrows"><button data-action="move" data-id="${s.id}" data-dir="-1" ${i === 0 ? 'disabled' : ''}>▲</button><button data-action="move" data-id="${s.id}" data-dir="1" ${i === list.length - 1 ? 'disabled' : ''}>▼</button></span>` : '')).join('') : '<p class="empty">No sites match.</p>'}
     <div class="btns"><button data-action="add-site">+ Add site</button></div>
-    ${archived.length ? `<details class="archived"><summary>Archived (${archived.length})</summary>${archived.map(s => siteRow(s)).join('')}</details>` : ''}`;
+    ${archived.length ? `<details class="archived"><summary>Archived (${archived.length})</summary>${archived.map(s => siteRow(s)).join('')}</details>` : ''}
+    ${deleted.length ? `<details class="archived"><summary>Deleted (${deleted.length})</summary>${deleted.map(s => siteRow(s)).join('')}</details>` : ''}`;
   openSheet(`Sites (${live().length})`, html, 'tall');
 }
 
@@ -394,7 +443,8 @@ async function openSite(id) {
   const html = `
     <div class="site-head"><span class="sw big" style="background:${sp.colour}"></span><div><b>${h(sp.common_name)}</b><br><i class="muted">${h(sp.scientific_name)}</i></div></div>
     <p>${badge(st.status)} <span class="muted">Season ${seasonLabel(new Date(), sp.season_start_month || 1)} · ${h(st.nextWindow)}</span>${st.percentTreated != null && st.percentTreated < 100 ? ` <span class="muted">· ${st.percentTreated}% treated</span>` : ''}</p>
-    ${site.archived ? `<div class="note warn">Archived ${fmtDate(site.archived_at)}. Hidden from the map, Today and routes. <button class="link" data-action="archive-site" data-id="${id}">Restore</button></div>` : ''}
+    ${site.deleted ? `<div class="note warn">Deleted ${fmtDate(site.deleted_at)}. Hidden everywhere except Sites > Deleted.<div class="btns"><button data-action="restore-site" data-id="${id}">Restore</button><button class="danger" data-action="purge-site" data-id="${id}">Delete permanently</button></div></div>` : ''}
+    ${!site.deleted && site.archived ? `<div class="note warn">Archived ${fmtDate(site.archived_at)}. Hidden from the map, Today and routes. <button class="link" data-action="archive-site" data-id="${id}">Restore</button></div>` : ''}
     ${sp.native ? '<div class="note warn">Indigenous plant: pasture only. Do not treat on roadsides or in bush.</div>' : ''}
     <div class="btns">
       <button class="primary" data-action="log-visit" data-id="${id}">Log visit</button>
@@ -494,7 +544,7 @@ function siteForm(id, geometry) {
     <label>Add photo <input type="file" name="photo" accept="image/*" capture="environment"></label>
     <div class="btns"><button class="primary" type="submit">Save site</button><button type="button" data-action="cancel-form" data-id="${id || ''}">Cancel</button></div>
     ${id ? `<div class="btns spaced"><button type="button" data-action="archive-site" data-id="${id}">${site.archived ? 'Restore from archive' : 'Archive this site'}</button><button type="button" class="danger" data-action="delete-site" data-id="${id}">Delete this site</button></div>
-    <p class="muted small">Archive keeps the site and its history but hides it from the map, Today and routes. Delete removes it for good.</p>` : ''}
+    <p class="muted small">Archive keeps the site and its history but hides it from the map, Today and routes. Delete moves it to Sites > Deleted, where you can restore it or delete it permanently.</p>` : ''}
   </form>`;
   openSheet(id ? 'Edit site' : 'New site', html);
   $('#site-form').addEventListener('submit', async e => {
@@ -660,6 +710,10 @@ function renderMore() {
     <p class="muted">Your sites and visits are stored only in this browser on this device. Back up regularly; restore a backup to move data to another device.</p>
     <div class="btns"><button class="primary" data-action="backup">Back up now</button><label class="button">Restore backup<input type="file" accept=".json,application/json" data-action="restore" hidden></label></div>
     <div class="btns"><button data-action="export-csv">Sites CSV</button><button data-action="export-geojson">GeoJSON</button><button data-action="export-kml">KML (Google Earth)</button></div>
+    <h3>Property boundaries</h3>
+    <p class="muted small">"Boundaries" on the map shows Victoria's land parcel lines (Vicmap, open data) when zoomed in. They are approximate, not a survey. You can also draw your own.</p>
+    ${S.boundaries.map(bd => `<div class="row"><span class="row-main"><b>${h(bd.name || 'Unnamed boundary')}</b><small>${geometrySize(bd.geometry)?.value ? (geometrySize(bd.geometry).value / 10000).toFixed(2) + ' ha approx.' : ''}</small></span><span class="row-side"><button class="link" data-action="zoom-boundary" data-id="${bd.id}">Show</button> <button class="link danger" data-action="delete-boundary" data-id="${bd.id}">Delete</button></span></div>`).join('')}
+    <div class="btns"><button data-action="draw-boundary">+ Draw a boundary</button><button data-action="toggle-parcels">${S.settings.parcels ? 'Hide' : 'Show'} Vicmap boundaries</button></div>
     <h3>Routes</h3>
     ${S.routes.map(r => `<div class="row"><span class="row-main"><b>${h(r.name)}</b><small>${S.sites.filter(s => s.route_id === r.id).length} sites</small></span><span class="row-side"><button class="link" data-action="rename-route" data-id="${r.id}">Rename</button> <button class="link danger" data-action="delete-route" data-id="${r.id}">Delete</button></span></div>`).join('') || '<p class="muted">No routes yet, e.g. "Property loop" or "Steels Creek Rd walk".</p>'}
     <form id="route-form" class="inline"><input name="name" placeholder="New route name" required><button type="submit">Add route</button></form>
@@ -671,7 +725,7 @@ function renderMore() {
     <p class="muted small" id="persist-status"></p>
     <h3>About</h3>
     <p class="muted small">Weed Site Manager · proof of concept, Stage 1. Treatment windows are estimates for the Yarra Valley; always follow the product label and current Agriculture Victoria rules. This app is not advice.<br>
-    Map data &copy; OpenStreetMap contributors. Imagery &copy; Esri, Maxar, Earthstar Geographics. Map library: Leaflet.<br>
+    Map data &copy; OpenStreetMap contributors. Imagery &copy; Esri, Maxar, Earthstar Geographics. Property boundaries &copy; State of Victoria (Vicmap), CC BY; approximate only. Map library: Leaflet.<br>
     Install: in your phone browser's menu choose "Add to Home Screen".</p>`;
   openSheet('More', html, 'tall');
   $('#route-form').addEventListener('submit', async e => {
@@ -760,7 +814,7 @@ function dataSnapshot() { return { species: Object.values(S.species), sites: S.s
 
 async function doBackup() {
   const photos = await db.all('photos');
-  const json = await backupJSON({ ...dataSnapshot(), photos, meta: [S.settings] });
+  const json = await backupJSON({ ...dataSnapshot(), photos, meta: [S.settings, { id: 'boundaries', list: S.boundaries }] });
   download(`weed-sites-backup-${stamp()}.json`, json, 'application/json');
   S.settings.lastBackup = new Date().toISOString();
   saveSettings();
@@ -774,8 +828,10 @@ async function doRestore(file) {
     for (const st of ['species', 'sites', 'visits', 'routes', 'photos']) { await db.clear(st); if (b[st].length) await db.putMany(st, b[st]); }
     const settings = (b.meta || []).find(m => m.id === 'settings');
     if (settings) await db.put('meta', { ...settings, lastBackup: new Date().toISOString() });
+    await db.put('meta', (b.meta || []).find(m => m.id === 'boundaries') || { id: 'boundaries', list: [] });
     await load();
     renderSites();
+    renderBoundaries();
     fitAll();
     toast('Backup restored');
     renderMore();
@@ -824,12 +880,36 @@ async function onAction(e) {
       startDraw(type, 'tap'); S.draw.editId = id; zoomTo(site); break;
     }
     case 'delete-site': {
-      if (!confirm('Delete this site and all its visits?')) return;
-      for (const v of S.visits.filter(x => x.site_id === id)) await db.del('visits', v.id);
+      const site = S.sites.find(s => s.id === id);
+      site.deleted = true; site.deleted_at = new Date().toISOString();
+      await db.put('sites', site);
+      renderSites(); toast('Moved to Sites > Deleted. You can restore it from there.', 4000); renderSiteList(); break;
+    }
+    case 'restore-site': {
+      const site = S.sites.find(s => s.id === id);
+      site.deleted = false; site.deleted_at = null;
+      await db.put('sites', site);
+      renderSites(); toast('Site restored'); openSite(id); break;
+    }
+    case 'purge-site': {
+      if (!confirm('Permanently delete this site, its visits and photos? This cannot be undone.')) return;
+      const site = S.sites.find(s => s.id === id);
+      for (const v of S.visits.filter(x => x.site_id === id)) { for (const ph of v.photos || []) await db.del('photos', ph); await db.del('visits', v.id); }
+      for (const ph of site?.photos || []) await db.del('photos', ph);
       await db.del('sites', id);
       S.visits = S.visits.filter(x => x.site_id !== id);
       S.sites = S.sites.filter(s => s.id !== id);
-      renderSites(); closeSheet(); toast('Site deleted'); break;
+      renderSites(); toast('Site permanently deleted'); renderSiteList(); break;
+    }
+    case 'draw-boundary': startDraw('area', 'tap'); S.draw.boundary = true; updateDrawBar(); break;
+    case 'toggle-parcels': setParcels(!S.settings.parcels); renderMore(); break;
+    case 'zoom-boundary': {
+      const bd = S.boundaries.find(x => x.id === id);
+      map.fitBounds(bd.geometry.coordinates[0].map(p => [p[1], p[0]]), { padding: [40, 40] }); hideSheet(); showTab('map', false); break;
+    }
+    case 'delete-boundary': {
+      if (!confirm('Delete this boundary?')) return;
+      S.boundaries = S.boundaries.filter(x => x.id !== id); await saveBoundaries(); renderBoundaries(); renderMore(); break;
     }
     case 'add-site': addSiteMenu(); break;
     case 'archive-site': {

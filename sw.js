@@ -1,7 +1,7 @@
 // Service worker: keeps the app working offline.
 // App files: cached on install. Map tiles: the ones you have viewed are kept (up to a limit),
 // so recently seen areas still show without reception. No site data passes through here.
-const VERSION = 'wsm-v5';
+const VERSION = 'wsm-v6';
 const SHELL = [
   './', 'index.html', 'css/app.css', 'manifest.webmanifest',
   'js/app.js', 'js/db.js', 'js/season.js', 'js/species.js', 'js/export.js',
@@ -11,7 +11,7 @@ const SHELL = [
 ];
 const TILE_CACHE = 'wsm-tiles';
 const TILE_LIMIT = 3000;
-const TILE_HOSTS = ['tile.openstreetmap.org', 'server.arcgisonline.com'];
+const TILE_HOSTS = ['tile.openstreetmap.org', 'server.arcgisonline.com', 'opendata.maps.vic.gov.au'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(VERSION).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));
