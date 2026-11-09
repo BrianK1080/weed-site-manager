@@ -132,6 +132,8 @@ legend { font-weight: 700; font-size: 13px; color: var(--green); padding: 0 4px;
 .facts dd { margin: 0; }
 .links a { color: var(--green); }
 .visit { padding: 8px 0; border-bottom: 1px solid var(--line); }
+.seedbox { background: #f4f7f5; border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; margin: 8px 0; }
+.seedbox p { margin: 4px 0; }
 .photos { display: flex; gap: 6px; flex-wrap: wrap; }
 .photos img { width: 84px; height: 84px; object-fit: cover; border-radius: 8px; cursor: pointer; }
 .choice { display: grid; gap: 8px; }

@@ -78,7 +78,7 @@ export function chemicalRows(data, from, to) {
       const site = sites[v.site_id] || {};
       const ll = site.geometry ? siteLatLng(site) : [];
       return {
-        date: localDate(v.datetime), start_time: localTime(v.datetime), operator: v.operator,
+        date: v.treated_date || v.visit_date || localDate(v.datetime), start_time: v.visit_date !== undefined ? (v.visit_time || '') : localTime(v.datetime), operator: v.operator,
         product_trade_name: v.product_trade_name, active_ingredient: v.active_ingredient, rate: v.rate,
         volume_used: v.volume_used, situation: v.situation, site_name: site.name,
         latitude: ll && ll[0] != null ? ll[0].toFixed(6) : '', longitude: ll && ll[1] != null ? ll[1].toFixed(6) : '',

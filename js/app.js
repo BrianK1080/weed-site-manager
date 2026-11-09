@@ -1,8 +1,8 @@
 // Weed Site Manager: Stage 1 app.
 import { db, uid, requestPersistence } from './db.js';
-import { SEED_SPECIES } from './species.js';
+import { SEED_SPECIES, SEED_VERSION } from './species.js';
 import { MONTHS, siteStatus, seasonLabel, monthsText, haversine, siteLatLng, nearestOrder, fmtDist, geometrySize } from './season.js';
-import { download, sitesCSV, chemicalRows, CHEM_COLS, toCSV, toGeoJSON, toKML, backupJSON, parseBackup, stamp, localDate } from './export.js';
+import { download, sitesCSV, chemicalRows, CHEM_COLS, toCSV, toGeoJSON, toKML, backupJSON, parseBackup, stamp, localDate, localTime } from './export.js';
 
 /* ---------- basemaps (pluggable: add a provider here) ---------- */
 const BASEMAPS = {
@@ -39,6 +39,13 @@ const spList = () => Object.values(S.species).sort((a, b) => a.common_name.local
 const statusOf = site => siteStatus(site, S.species[site.species_id], S.visits);
 const fmtDate = iso => iso ? new Date(iso).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' }) : '';
 const fmtDT = iso => iso ? new Date(iso).toLocaleString('en-AU', { day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
+function visitWhen(v) {
+  if (v.visit_date === undefined) return fmtDT(v.datetime); // older records
+  const parts = [];
+  if (v.visit_date) parts.push(`Visited ${fmtDate(v.visit_date + 'T12:00')}${v.visit_time ? ' ' + v.visit_time : ''}`);
+  if (v.treated_date && v.treated_date !== v.visit_date) parts.push(`treated ${fmtDate(v.treated_date + 'T12:00')}`);
+  return parts.length ? parts.join(' · ') : 'No date recorded';
+}
 const nowLocal = () => { const d = new Date(); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 16); };
 
 function toast(msg, ms = 2500) {
@@ -54,6 +61,17 @@ async function load() {
   let species = await db.all('species');
   if (!species.length) { await db.putMany('species', SEED_SPECIES); species = SEED_SPECIES; }
   S.species = Object.fromEntries(species.map(s => [s.id, s]));
+  const settings0 = await db.get('meta', 'settings');
+  if (!settings0 || (settings0.seedVersion || 1) < SEED_VERSION) {
+    // Add newly introduced seed fields to stored weeds, never overwriting the owner's edits.
+    const changed = [];
+    for (const seed of SEED_SPECIES) {
+      const cur = S.species[seed.id];
+      if (cur && !cur.seed_info && seed.seed_info) { cur.seed_info = seed.seed_info; changed.push(cur); }
+    }
+    if (changed.length) await db.putMany('species', changed);
+    await db.put('meta', { ...(settings0 || S.settings), id: 'settings', seedVersion: SEED_VERSION });
+  }
   S.sites = await db.all('sites');
   S.visits = await db.all('visits');
   S.routes = (await db.all('routes')).sort((a, b) => a.name.localeCompare(b.name));
@@ -383,10 +401,15 @@ async function openSite(id) {
     </dl>
     ${sp.preferred_methods ? `<p><b>Method:</b> ${h(sp.preferred_methods)}</p>` : ''}
     ${sp.cautions ? `<p><b>Caution:</b> ${h(sp.cautions)}</p>` : ''}
+    ${sp.seed_info && (sp.seed_info.seed_bank || sp.seed_info.seeds || sp.seed_info.spread) ? `<div class="seedbox"><b>If left to seed</b>
+      ${sp.seed_info.seeds ? `<p><span class="muted">Seed:</span> ${h(sp.seed_info.seeds)}</p>` : ''}
+      ${sp.seed_info.seed_bank ? `<p><span class="muted">Seed bank:</span> ${h(sp.seed_info.seed_bank)}</p>` : ''}
+      ${sp.seed_info.spread ? `<p><span class="muted">Spreads by:</span> ${h(sp.seed_info.spread)}</p>` : ''}
+      ${sp.seed_info.source ? `<p class="small"><a href="${h(sp.seed_info.source)}" target="_blank" rel="noopener">Source</a></p>` : ''}</div>` : ''}
     ${links ? `<p class="links">${links}</p>` : ''}
     <div class="photos" id="site-photos"></div>
     <h3>Visit history (${visits.length})</h3>
-    ${visits.length ? visits.map(v => `<div class="visit"><b>${fmtDT(v.datetime)}</b> · ${h(METHODS[v.method] || v.method)}${v.plants_found === false ? ' · no plants found' : ''}${v.percent_treated != null && v.method !== 'inspect' ? ` · ${v.percent_treated}%` : ''}
+    ${visits.length ? visits.map(v => `<div class="visit"><b>${visitWhen(v)}</b> · ${h(METHODS[v.method] || v.method)}${v.plants_found === false ? ' · no plants found' : ''}${v.percent_treated != null && v.method !== 'inspect' ? ` · ${v.percent_treated}%` : ''}
       ${v.product_trade_name ? `<br><small>${h(v.product_trade_name)}${v.rate ? ' @ ' + h(v.rate) : ''}${v.wind_speed_kmh ? ` · wind ${h(v.wind_speed_kmh)} km/h ${h(v.wind_direction)}` : ''}</small>` : ''}
       ${v.notes ? `<br><small>${h(v.notes)}</small>` : ''}
       <br><button class="link" data-action="edit-visit" data-id="${v.id}">Edit</button></div>`).join('') : '<p class="muted">No visits yet.</p>'}
@@ -484,16 +507,20 @@ function resizeImage(file, max, quality) {
 function visitForm(siteId, visitId) {
   const site = S.sites.find(s => s.id === siteId);
   const v = visitId ? S.visits.find(x => x.id === visitId) : {
-    datetime: nowLocal(), operator: S.settings.operator || '', method: 'chip', plants_found: true, percent_treated: 100,
+    visit_date: stamp(), visit_time: localTime(new Date().toISOString()), treated_date: '',
+    operator: S.settings.operator || '', method: 'chip', plants_found: true, percent_treated: 100,
     situation: site.tenure === 'roadside' ? 'Roadside (non-crop)' : site.tenure === 'other' ? 'Non-crop public land' : 'Pasture / private land',
   };
   const products = [...new Set(S.visits.map(x => x.product_trade_name).filter(Boolean))];
   const html = `<form id="visit-form">
     <p class="muted">${h(site.name)} · ${h(S.species[site.species_id]?.common_name || '')}</p>
-    <div class="grid2">
-      <label>Date and time <input type="datetime-local" name="datetime" required value="${h((v.datetime || '').slice(0, 16))}"></label>
-      <label>Operator <input name="operator" value="${h(v.operator || '')}" required></label>
+    <div class="grid3">
+      <label>Date visited <input type="date" name="visit_date" value="${h(v.visit_date ?? (v.datetime ? localDate(v.datetime) : ''))}"></label>
+      <label>Time <input type="time" name="visit_time" value="${h(v.visit_time ?? (v.datetime ? localTime(v.datetime) : ''))}"></label>
+      <label>Date treated <input type="date" name="treated_date" value="${h(v.treated_date || '')}"></label>
     </div>
+    <p class="muted small">All optional. If "Date treated" is blank, a treatment counts on the date visited.</p>
+    <label>Operator <input name="operator" value="${h(v.operator || '')}"></label>
     <label>Method <select name="method">${Object.entries(METHODS).map(([k, t]) => `<option value="${k}" ${v.method === k ? 'selected' : ''}>${t}</option>`).join('')}</select></label>
     <div class="grid2">
       <label class="chk"><input type="checkbox" name="plants_found" ${v.plants_found !== false ? 'checked' : ''}> Plants found</label>
@@ -513,7 +540,7 @@ function visitForm(siteId, visitId) {
         <label>Wind from <select name="wind_direction"><option value=""></option>${WIND.map(w => `<option ${v.wind_direction === w ? 'selected' : ''}>${w}</option>`).join('')}</select></label>
         <label>Temp °C <input name="temp_c" type="number" value="${h(v.temp_c ?? '')}"></label>
       </div>
-      <p class="muted small">Follow the product label for rates and restrictions. This app records what you did; it is not advice.</p>
+      <p class="muted small">All optional. For a complete Victorian record include product, rate, situation, and wind speed and direction. Follow the product label for rates and restrictions; this app records what you did and is not advice.</p>
     </fieldset>
     <label>Kill % at follow-up check <input name="kill_percent_followup" type="number" min="0" max="100" value="${h(v.kill_percent_followup ?? '')}"></label>
     <label>Notes <textarea name="notes" rows="2">${h(v.notes || '')}</textarea></label>
@@ -529,13 +556,15 @@ function visitForm(siteId, visitId) {
     const f = new FormData(form);
     const method = f.get('method');
     const chem = CHEM_METHODS.includes(method) && method !== 'other' || (method === 'other' && f.get('product_trade_name'));
-    if (chem) {
-      const missing = ['product_trade_name', 'rate', 'wind_speed_kmh', 'wind_direction'].filter(k => !String(f.get(k) || '').trim());
-      if (missing.length) { toast('For the chemical record, fill in product, rate, wind speed and wind direction.', 4000); return; }
-    }
-    const rec = visitId ? v : { id: uid('visit'), site_id: siteId, photos: [] };
-    rec.datetime = new Date(f.get('datetime')).toISOString();
-    rec.operator = f.get('operator').trim();
+    const missing = chem ? [['product_trade_name', 'product'], ['rate', 'rate'], ['wind_speed_kmh', 'wind speed'], ['wind_direction', 'wind direction']].filter(([k]) => !String(f.get(k) || '').trim()).map(([, t]) => t) : [];
+    const rec = visitId ? v : { id: uid('visit'), site_id: siteId, photos: [], created_at: new Date().toISOString() };
+    rec.visit_date = f.get('visit_date') || '';
+    rec.visit_time = f.get('visit_time') || '';
+    rec.treated_date = f.get('treated_date') || '';
+    // Sort/season key: treated date, else visit date, else when the record was made.
+    const keyDate = rec.treated_date || rec.visit_date;
+    rec.datetime = keyDate ? new Date(`${keyDate}T${rec.visit_time || '12:00'}`).toISOString() : (rec.datetime || rec.created_at || new Date().toISOString());
+    rec.operator = (f.get('operator') || '').trim();
     rec.method = method;
     rec.plants_found = f.get('plants_found') === 'on';
     for (const k of ['product_trade_name', 'active_ingredient', 'rate', 'volume_used', 'situation', 'wind_direction', 'notes']) rec[k] = CHEM_METHODS.includes(method) || k === 'notes' ? String(f.get(k) || '').trim() : '';
@@ -549,7 +578,7 @@ function visitForm(siteId, visitId) {
     if (!visitId) S.visits.push(rec);
     if (rec.operator && rec.operator !== S.settings.operator) { S.settings.operator = rec.operator; saveSettings(); }
     renderSites();
-    toast('Visit saved');
+    toast(missing.length ? `Visit saved. Not filled in for the Victorian chemical record: ${missing.join(', ')}.` : 'Visit saved', missing.length ? 5000 : 2500);
     openSite(siteId);
   });
 }
@@ -623,6 +652,10 @@ function speciesForm(id) {
     <p><b>Scouting months</b></p>${monthBoxes('scouting_months', s.scouting_months || [])}
     <label>Preferred methods <textarea name="preferred_methods" rows="2">${h(s.preferred_methods || '')}</textarea></label>
     <label>Cautions <textarea name="cautions" rows="2">${h(s.cautions || '')}</textarea></label>
+    <label>Seed production <textarea name="seed_seeds" rows="2">${h(s.seed_info?.seeds || '')}</textarea></label>
+    <label>Seed bank (how long seed survives in soil) <textarea name="seed_bank" rows="2">${h(s.seed_info?.seed_bank || '')}</textarea></label>
+    <label>Spreads by <textarea name="seed_spread" rows="2">${h(s.seed_info?.spread || '')}</textarea></label>
+    <label>Seed info source link <input name="seed_source" type="url" value="${h(s.seed_info?.source || '')}"></label>
     <label>Info link <input name="link" type="url" value="${h(s.links?.council || '')}"></label>
     <div class="btns"><button class="primary" type="submit">Save</button><button type="button" data-action="tab" data-tab="more">Cancel</button>
     ${id && !S.sites.some(x => x.species_id === id) ? `<button type="button" class="danger" data-action="delete-species" data-id="${id}">Delete</button>` : ''}</div>
@@ -642,6 +675,7 @@ function speciesForm(id) {
     rec.preferred_methods = f.get('preferred_methods').trim();
     rec.cautions = f.get('cautions').trim();
     rec.links = { ...(rec.links || {}), council: f.get('link').trim() };
+    rec.seed_info = { seeds: f.get('seed_seeds').trim(), seed_bank: f.get('seed_bank').trim(), spread: f.get('seed_spread').trim(), source: f.get('seed_source').trim() };
     await db.put('species', rec);
     S.species[rec.id] = rec;
     renderSites();
