@@ -5,6 +5,9 @@ import { MONTHS, siteStatus, seasonLabel, monthsText, haversine, siteLatLng, nea
 import { download, sitesCSV, chemicalRows, CHEM_COLS, toCSV, toGeoJSON, toKML, backupJSON, parseBackup, stamp, localDate, localTime } from './export.js';
 
 /* ---------- basemaps (pluggable: add a provider here) ---------- */
+// Keep in step with VERSION in sw.js; shown under More > About so you can tell which version is running.
+const APP_VERSION = 8;
+
 const BASEMAPS = {
   map: { label: 'Map', layers: [{ url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', opts: { maxZoom: 21, maxNativeZoom: 19, attribution: '&copy; OpenStreetMap contributors' } }] },
   sat: { label: 'Satellite', layers: [{ url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', opts: { maxZoom: 21, maxNativeZoom: 18, attribution: 'Imagery &copy; Esri, Maxar, Earthstar Geographics' } }] },
@@ -342,7 +345,7 @@ function markRequired(root) {
     if (req.length && !form.querySelector('.req-note')) form.insertAdjacentHTML('afterbegin', '<p class="req-note"><span class="req">*</span> required. Everything else is optional.</p>');
   });
 }
-function hideSheet() { $('#sheet').hidden = true; document.body.classList.remove('sheet-open'); }
+function hideSheet() { $('#sheet').hidden = true; document.body.classList.remove('sheet-open'); if (S.reloadPending) S.reloadPending(); }
 function closeSheet() { hideSheet(); if (S.tab !== 'map') showTab('map', false); }
 
 function showTab(tab, render = true) {
@@ -740,7 +743,7 @@ function renderMore() {
     <form id="settings-form" class="inline"><input name="operator" placeholder="Your name (operator)" value="${h(S.settings.operator)}"><button type="submit">Save</button></form>
     <p class="muted small" id="persist-status"></p>
     <h3>About</h3>
-    <p class="muted small">Weed Site Manager · proof of concept, Stage 1. Treatment windows are estimates for the Yarra Valley; always follow the product label and current Agriculture Victoria rules. This app is not advice.<br>
+    <p class="muted small">Weed Site Manager · version ${APP_VERSION} · proof of concept, Stage 1. Treatment windows are estimates for the Yarra Valley; always follow the product label and current Agriculture Victoria rules. This app is not advice.<br>
     Map data &copy; OpenStreetMap contributors. Imagery &copy; Esri, Maxar, Earthstar Geographics. Property boundaries &copy; State of Victoria (Vicmap), CC BY; approximate only. Map library: Leaflet.<br>
     Install: in your phone browser's menu choose "Add to Home Screen".</p>`;
   openSheet('More', html, 'tall');
@@ -1061,7 +1064,19 @@ async function start() {
   renderSites();
   startLocation();
   requestPersistence();
-  if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
+  if ('serviceWorker' in navigator && location.protocol === 'https:') {
+    // When a new version takes over, reload once so it shows straight away.
+    // If a form is open, wait until it's closed so nothing typed is lost.
+    const hadController = !!navigator.serviceWorker.controller;
+    let reloaded = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (!hadController || reloaded) return;
+      const go = () => { if (!reloaded) { reloaded = true; location.reload(); } };
+      if ($('#sheet').hidden) go();
+      else { S.reloadPending = go; toast('App updated. It will refresh when you close this panel.'); }
+    });
+    navigator.serviceWorker.register('sw.js').then(r => r.update()).catch(() => {});
+  }
   window.WSM = { S, map, db }; // for debugging and tests
 }
 

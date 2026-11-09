@@ -10,7 +10,7 @@ The full spec, decisions and status live in the claude.ai Project "Weed Manageme
 - `js/species.js`: seed species (only used when the species store is empty).
 - `js/export.js`: CSV/GeoJSON/KML/backup. Dates in exports use device-local time.
 - `js/db.js`: IndexedDB wrapper. Stores: species, sites, visits, routes, photos, meta.
-- `sw.js`: offline cache. Bump `VERSION` whenever shell files change, and add new files to `SHELL`.
+- `sw.js`: offline cache. Bump `VERSION` whenever shell files change (and `APP_VERSION` in app.js to the same number), and add new files to `SHELL`.
 - `vendor/leaflet`: Leaflet 1.9.4, vendored for offline use.
 
 ## Rules
