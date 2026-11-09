@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en-AU">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Weed Site Manager</title>
+  <meta name="theme-color" content="#2e5d34">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon-192.png">
+  <link rel="apple-touch-icon" href="icons/icon-180.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Weed Sites">
+  <link rel="stylesheet" href="vendor/leaflet/leaflet.css">
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+  <header id="topbar">
+    <span class="brand">Weed Sites</span>
+    <span id="gps-acc" hidden></span>
+    <button id="btn-layers" title="Change map type">Satellite</button>
+    <button id="btn-locate" title="Follow my location" aria-label="Follow my location">◎</button>
+  </header>
+
+  <div id="map"></div>
+  <div id="legend" hidden></div>
+  <button id="btn-add" title="Add a weed site" aria-label="Add a weed site">+</button>
+
+  <div id="drawbar" hidden>
+    <p id="draw-msg"></p>
+    <div class="btns">
+      <button id="draw-gps">Add GPS point</button>
+      <button id="draw-undo">Undo</button>
+      <button id="draw-done" class="primary">Finish</button>
+      <button id="draw-cancel">Cancel</button>
+    </div>
+  </div>
+
+  <section id="sheet" hidden>
+    <div class="sheet-head"><h2 id="sheet-title"></h2><button id="sheet-close" aria-label="Close">✕</button></div>
+    <div id="sheet-body"></div>
+  </section>
+
+  <nav id="tabs">
+    <button data-tab="map" class="on">Map</button>
+    <button data-tab="today">Today</button>
+    <button data-tab="sites">Sites</button>
+    <button data-tab="records">Records</button>
+    <button data-tab="more">More</button>
+  </nav>
+
+  <div id="toast" hidden></div>
+
+  <script src="vendor/leaflet/leaflet.js"></script>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>

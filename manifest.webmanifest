@@ -1,0 +1,15 @@
+{
+  "name": "Weed Site Manager",
+  "short_name": "Weed Sites",
+  "description": "Record, revisit and treat weed sites season after season.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#2e5d34",
+  "theme_color": "#2e5d34",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
