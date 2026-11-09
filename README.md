@@ -22,7 +22,16 @@ Sites, visits and photos are stored only in the browser on the device you use. N
 
 ## Install on your phone
 
-Open the link in Safari (iPhone) or Chrome (Android), then Share or menu > **Add to Home Screen**.
+### iPhone
+1. Open the link in **Safari itself**, not from inside Outlook or another app's built-in viewer (those can block location). In Outlook's viewer tap ••• > Open in Safari. When asked to use your location, tap **Allow**.
+2. **Settings > Privacy & Security > Location Services**: on; **Safari Websites** = **While Using the App**; **Precise Location** on.
+3. If "Don't Allow" was tapped earlier: Safari address bar page-settings button (page icon or "aA") > Website Settings > Location > **Allow**. Or Settings > Apps > Safari > Location.
+4. Share > **Add to Home Screen**. The icon uses the same Safari permission.
+
+### Android
+Open the link in Chrome, allow location when asked, then menu ⋮ > **Add to Home screen** (or Install app). If location is blocked: tap the icon left of the address > Permissions > Location > Allow.
+
+**Check it's working:** the top bar shows "GPS ±5 m" (or similar) and a blue dot marks you; ◎ centres the map on you. "GPS blocked" means the phone refused location; repeat the steps above. After an update, close and reopen the app once.
 
 ## Not advice
 
