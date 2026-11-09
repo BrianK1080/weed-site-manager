@@ -164,3 +164,6 @@ th, td { text-align: left; padding: 6px; border-bottom: 1px solid var(--line); w
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .25; } }
 .due-ring, .due-line { animation: pulse 1.6s ease-in-out infinite; }
 .leaflet-container { font: inherit; }
+
+.archived { margin-top: 16px; border-top: 1px solid var(--line); padding-top: 8px; }
+.archived summary { font-weight: 700; color: var(--muted); cursor: pointer; padding: 6px 0; }

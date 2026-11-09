@@ -36,6 +36,7 @@ let map, baseLayers = [], siteLayer, posMarker, accCircle, drawLayer;
 
 const $ = sel => document.querySelector(sel);
 const h = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const live = () => S.sites.filter(s => !s.archived); // archived sites stay out of the map, Today and routes
 const spList = () => Object.values(S.species).sort((a, b) => a.common_name.localeCompare(b.common_name));
 const statusOf = site => siteStatus(site, S.species[site.species_id], S.visits);
 const fmtDate = iso => iso ? new Date(iso).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' }) : '';
@@ -130,7 +131,7 @@ function shapeLayers(site, colour, status, pct) {
 function renderSites() {
   siteLayer.clearLayers();
   const z = map.getZoom();
-  for (const site of S.sites) {
+  for (const site of live()) {
     if (!site.geometry || S.hidden.has(site.species_id)) continue;
     const sp = S.species[site.species_id];
     const colour = sp ? sp.colour : '#ff0000';
@@ -148,8 +149,8 @@ function renderSites() {
 
 function renderLegend() {
   const b = map.getBounds();
-  const present = new Set(S.sites.filter(s => { const ll = siteLatLng(s); return ll && b.contains(ll); }).map(s => s.species_id));
-  const items = spList().filter(s => present.has(s.id) || (S.hidden.has(s.id) && S.sites.some(x => x.species_id === s.id)));
+  const present = new Set(live().filter(s => { const ll = siteLatLng(s); return ll && b.contains(ll); }).map(s => s.species_id));
+  const items = spList().filter(s => present.has(s.id) || (S.hidden.has(s.id) && live().some(x => x.species_id === s.id)));
   const el = $('#legend');
   if (!items.length) { el.hidden = true; return; }
   el.hidden = false;
@@ -181,7 +182,7 @@ function initMap() {
 }
 
 function fitAll() {
-  const pts = S.sites.map(siteLatLng).filter(Boolean);
+  const pts = live().map(siteLatLng).filter(Boolean);
   if (pts.length === 1) map.setView(pts[0], 17);
   else if (pts.length) map.fitBounds(pts, { padding: [40, 40], maxZoom: 18 });
 }
@@ -304,7 +305,7 @@ function siteRow(site, extra = '') {
   return `<div class="row" data-action="open-site" data-id="${site.id}">
     <span class="row-sym">${pointSVG(sp.colour, st.status)}</span>
     <span class="row-main"><b>${h(site.name)}</b><small>${h(sp.common_name)} · ${h(site.location_id || TENURE[site.tenure] || '')}</small><small>${last}${d != null ? ' · ' + fmtDist(d) : ''}</small></span>
-    <span class="row-side">${badge(st.status)}${extra}</span></div>`;
+    <span class="row-side">${site.archived ? '<span class="badge b-monitoring">Archived</span>' : badge(st.status)}${extra}</span></div>`;
 }
 
 const routeOptions = (sel, allLabel = 'All sites') => `<option value="">${allLabel}</option>${S.routes.map(r => `<option value="${r.id}" ${sel === r.id ? 'selected' : ''}>${h(r.name)}</option>`).join('')}`;
@@ -325,7 +326,7 @@ function backupNag() {
 
 /* ---------- Today ---------- */
 function renderToday() {
-  let list = S.sites.filter(s => !S.routeFilter || s.route_id === S.routeFilter);
+  let list = live().filter(s => !S.routeFilter || s.route_id === S.routeFilter);
   const statuses = list.map(statusOf);
   const dueCount = statuses.filter(s => s.status === 'due').length;
   if (!S.showAllToday) list = list.filter(s => statusOf(s).status === 'due');
@@ -335,16 +336,18 @@ function renderToday() {
     <label class="chk"><input type="checkbox" data-action="today-all" ${S.showAllToday ? 'checked' : ''}> Show sites not due</label></div>
     <p class="muted">${dueCount} site${dueCount === 1 ? '' : 's'} due now${S.routeFilter ? ' on this route, in route order' : S.pos ? ', nearest first' : ''}.</p>
     ${S.routeFilter ? `<div class="btns"><button data-action="suggest-order" ${S.pos ? '' : 'disabled'}>Suggest order from here</button></div>` : ''}
-    ${list.length ? list.map(s => siteRow(s)).join('') : `<p class="empty">${S.sites.length ? 'Nothing due. Tick "Show sites not due" to see all.' : 'No sites yet. Tap + on the map to add your first weed site.'}</p>`}`;
+    ${list.length ? list.map(s => siteRow(s)).join('') : `<p class="empty">${live().length ? 'Nothing due. Tick "Show sites not due" to see all.' : 'No sites yet. Tap + on the map to add your first weed site.'}</p>`}`;
   openSheet('Today', html, 'tall');
 }
 
 /* ---------- Sites list ---------- */
 function renderSiteList(filterText = '') {
   const q = filterText.toLowerCase();
-  let list = S.sites.filter(s => !S.routeFilter || s.route_id === S.routeFilter)
+  let all = S.sites.filter(s => !S.routeFilter || s.route_id === S.routeFilter)
     .filter(s => !S.locFilter || s.location_id === S.locFilter)
     .filter(s => !q || (s.location_id || '').toLowerCase().includes(q) || s.name.toLowerCase().includes(q) || (S.species[s.species_id]?.common_name || '').toLowerCase().includes(q));
+  const archived = all.filter(s => s.archived).sort((a, b) => a.name.localeCompare(b.name));
+  let list = all.filter(s => !s.archived);
   sortForRoute(list);
   const reorder = !!S.routeFilter;
   const html = `<div class="controls"><input type="search" placeholder="Search sites or weeds" value="${h(filterText)}" data-action="site-search">
@@ -353,12 +356,13 @@ function renderSiteList(filterText = '') {
     ${S.locFilter ? `<p class="muted">${list.length} site${list.length === 1 ? '' : 's'} at ${h(S.locFilter)}.</p>` : ''}
     ${reorder ? '<p class="muted">Use the arrows to set the visit order for this route.</p>' : ''}
     ${list.length ? list.map((s, i) => siteRow(s, reorder ? `<span class="arrows"><button data-action="move" data-id="${s.id}" data-dir="-1" ${i === 0 ? 'disabled' : ''}>▲</button><button data-action="move" data-id="${s.id}" data-dir="1" ${i === list.length - 1 ? 'disabled' : ''}>▼</button></span>` : '')).join('') : '<p class="empty">No sites match.</p>'}
-    <div class="btns"><button data-action="add-site">+ Add site</button></div>`;
-  openSheet(`Sites (${S.sites.length})`, html, 'tall');
+    <div class="btns"><button data-action="add-site">+ Add site</button></div>
+    ${archived.length ? `<details class="archived"><summary>Archived (${archived.length})</summary>${archived.map(s => siteRow(s)).join('')}</details>` : ''}`;
+  openSheet(`Sites (${live().length})`, html, 'tall');
 }
 
 async function moveSite(id, dir) {
-  const list = sortForRoute(S.sites.filter(s => s.route_id === S.routeFilter));
+  const list = sortForRoute(live().filter(s => s.route_id === S.routeFilter));
   list.forEach((s, i) => { s.route_order = i; });
   const i = list.findIndex(s => s.id === id);
   const j = i + dir;
@@ -369,7 +373,7 @@ async function moveSite(id, dir) {
 }
 
 async function suggestOrder() {
-  const list = S.sites.filter(s => s.route_id === S.routeFilter);
+  const list = live().filter(s => s.route_id === S.routeFilter);
   const order = nearestOrder(list, S.pos ? S.pos.ll : null);
   order.forEach((id, i) => { list.find(s => s.id === id).route_order = i; });
   await db.putMany('sites', list);
@@ -390,6 +394,7 @@ async function openSite(id) {
   const html = `
     <div class="site-head"><span class="sw big" style="background:${sp.colour}"></span><div><b>${h(sp.common_name)}</b><br><i class="muted">${h(sp.scientific_name)}</i></div></div>
     <p>${badge(st.status)} <span class="muted">Season ${seasonLabel(new Date(), sp.season_start_month || 1)} · ${h(st.nextWindow)}</span>${st.percentTreated != null && st.percentTreated < 100 ? ` <span class="muted">· ${st.percentTreated}% treated</span>` : ''}</p>
+    ${site.archived ? `<div class="note warn">Archived ${fmtDate(site.archived_at)}. Hidden from the map, Today and routes. <button class="link" data-action="archive-site" data-id="${id}">Restore</button></div>` : ''}
     ${sp.native ? '<div class="note warn">Indigenous plant: pasture only. Do not treat on roadsides or in bush.</div>' : ''}
     <div class="btns">
       <button class="primary" data-action="log-visit" data-id="${id}">Log visit</button>
@@ -397,7 +402,7 @@ async function openSite(id) {
       ${ll ? `<a class="button" href="https://www.google.com/maps/dir/?api=1&destination=${ll[0]},${ll[1]}" target="_blank" rel="noopener">Directions</a>` : ''}
     </div>
     <dl class="facts">
-      <dt>Status</dt><dd>${STATUS_TEXT[st.status]}${site.status_override ? ` (set to ${site.status_override})` : ''}${st.lastVisit ? ` · last visit ${h(visitWhen(st.lastVisit))}` : ''}</dd>
+      <dt>Status</dt><dd>${STATUS_TEXT[st.status]}${site.status_override && site.status_override !== 'active' ? ` (set to ${site.status_override})` : ''}${st.lastVisit ? ` · last visit ${h(visitWhen(st.lastVisit))}` : ''}</dd>
       ${site.location_id ? `<dt>Property / ID</dt><dd>${h(site.location_id)}</dd>` : ''}
       <dt>Land</dt><dd>${h(TENURE[site.tenure] || '-')}${site.land_manager ? ' · ' + h(site.land_manager) : ''}</dd>
       ${site.tenure !== 'private' ? `<dt>Permission</dt><dd>${h(site.permission_ref) || '<span class="warn-text">None recorded</span>'}</dd>` : ''}
@@ -421,7 +426,7 @@ async function openSite(id) {
     ${links ? `<p class="links">${links}</p>` : ''}
     <div class="photos" id="site-photos"></div>
     <h3>Visit history (${visits.length})</h3>
-    ${visits.length ? visits.map(v => `<div class="visit"><b>${visitWhen(v)}</b> · ${h(METHODS[v.method] || v.method)}${v.plants_found === false ? ' · no plants found' : ''}${v.plants_count != null ? ` · ${v.plants_count} plants` : ''}${v.percent_treated != null && v.method !== 'inspect' ? ` · ${v.percent_treated}%` : ''}
+    ${visits.length ? visits.map(v => `<div class="visit"><b>${visitWhen(v)}</b> · ${h(METHODS[v.method] || v.method)}${v.plants_found === false ? ' · no plants found' : ''}${v.plants_count != null ? ` · ${v.plants_count} plants` : ''}${v.status_after && v.status_after !== 'active' ? ` · → ${v.status_after === 'monitoring' ? 'Monitoring' : 'Eradicated'}` : ''}${v.percent_treated != null && v.method !== 'inspect' && v.plants_found !== false ? ` · ${v.percent_treated}%` : ''}
       ${v.product_trade_name ? `<br><small>${h(v.product_trade_name)}${v.rate ? ' @ ' + h(v.rate) : ''}${v.wind_speed_kmh ? ` · wind ${h(v.wind_speed_kmh)} km/h ${h(v.wind_direction)}` : ''}</small>` : ''}
       ${v.notes ? `<br><small>${h(v.notes)}</small>` : ''}
       <br><button class="link" data-action="edit-visit" data-id="${v.id}">Edit</button></div>`).join('') : '<p class="muted">No visits yet.</p>'}
@@ -488,7 +493,8 @@ function siteForm(id, geometry) {
     <label>Management status <select name="status_override"><option value="">Active management</option><option value="monitoring" ${site.status_override === 'monitoring' ? 'selected' : ''}>Monitoring only</option><option value="eradicated" ${site.status_override === 'eradicated' ? 'selected' : ''}>Eradicated (keep watching)</option></select></label>
     <label>Add photo <input type="file" name="photo" accept="image/*" capture="environment"></label>
     <div class="btns"><button class="primary" type="submit">Save site</button><button type="button" data-action="cancel-form" data-id="${id || ''}">Cancel</button></div>
-    ${id ? `<div class="btns spaced"><button type="button" class="danger" data-action="delete-site" data-id="${id}">Delete this site</button></div>` : ''}
+    ${id ? `<div class="btns spaced"><button type="button" data-action="archive-site" data-id="${id}">${site.archived ? 'Restore from archive' : 'Archive this site'}</button><button type="button" class="danger" data-action="delete-site" data-id="${id}">Delete this site</button></div>
+    <p class="muted small">Archive keeps the site and its history but hides it from the map, Today and routes. Delete removes it for good.</p>` : ''}
   </form>`;
   openSheet(id ? 'Edit site' : 'New site', html);
   $('#site-form').addEventListener('submit', async e => {
@@ -497,7 +503,9 @@ function siteForm(id, geometry) {
     const isNew = !id;
     const s = isNew ? { id: uid('site'), created_at: new Date().toISOString(), geometry, photos: [] } : site;
     s.species_id = await resolveSpecies(f.get('species_name'));
+    const keepActive = site.status_override === 'active';
     for (const k of ['name', 'location_id', 'tenure', 'land_manager', 'permission_ref', 'size_unit', 'route_id', 'access_notes', 'status_override']) s[k] = (f.get(k) || '').toString().trim() || (k === 'status_override' || k === 'route_id' ? null : '');
+    if (!s.status_override && keepActive) s.status_override = 'active';
     for (const k of ['density', 'priority', 'size_value']) s[k] = f.get(k) === '' ? null : Number(f.get(k));
     if (s.route_id && s.route_order == null) s.route_order = S.sites.filter(x => x.route_id === s.route_id).length;
     const file = f.get('photo');
@@ -559,6 +567,7 @@ function visitForm(siteId, visitId) {
       <label>% of site treated <input type="number" name="percent_treated" min="0" max="100" value="${h(v.percent_treated ?? '')}"></label>
     </div>
     <label>Number of plants found (optional) <input type="number" name="plants_count" min="0" inputmode="numeric" value="${h(v.plants_count ?? '')}"></label>
+    <label>Management status after this visit <select name="mgmt_status">${[['active', 'Active management'], ['monitoring', 'Monitoring only'], ['eradicated', 'Eradicated (keep watching)']].map(([k, t]) => `<option value="${k}" ${(site.status_override || 'active') === k ? 'selected' : ''}>${t}</option>`).join('')}</select></label>
     <fieldset id="chem" ${CHEM_METHODS.includes(v.method) ? '' : 'hidden'}>
       <legend>Chemical use record (Victoria: within 48 hours, keep 2 years)</legend>
       <label>Product trade name <input name="product_trade_name" list="products" value="${h(v.product_trade_name || '')}"><datalist id="products">${products.map(p => `<option value="${h(p)}">`).join('')}</datalist></label>
@@ -584,6 +593,9 @@ function visitForm(siteId, visitId) {
   openSheet(visitId ? 'Edit visit' : 'Log visit', html);
   const form = $('#visit-form');
   form.method.addEventListener('change', () => { $('#chem').hidden = !CHEM_METHODS.includes(form.method.value); });
+  form.plants_found.addEventListener('change', () => {
+    form.mgmt_status.value = form.plants_found.checked ? (site.status_override === 'monitoring' || site.status_override === 'eradicated' ? site.status_override : 'active') : 'monitoring';
+  });
   form.product_trade_name.addEventListener('change', () => {
     const m = own.find(x => x.product === form.product_trade_name.value);
     if (m && m.active && !form.active_ingredient.value) form.active_ingredient.value = m.active;
@@ -604,6 +616,11 @@ function visitForm(siteId, visitId) {
     rec.operator = (f.get('operator') || '').trim();
     rec.method = method;
     rec.plants_found = f.get('plants_found') === 'on';
+    const ms = f.get('mgmt_status') || 'active';
+    rec.status_after = ms;
+    // 'active' is stored explicitly only when no plants were found, so it overrides the automatic switch to monitoring.
+    const newOverride = ms === 'active' ? (rec.plants_found ? null : 'active') : ms;
+    if (site.status_override !== newOverride) { site.status_override = newOverride; await db.put('sites', site); }
     for (const k of ['product_trade_name', 'active_ingredient', 'rate', 'volume_used', 'situation', 'wind_direction', 'notes']) rec[k] = CHEM_METHODS.includes(method) || k === 'notes' ? String(f.get(k) || '').trim() : '';
     for (const k of ['percent_treated', 'kill_percent_followup', 'wind_speed_kmh', 'temp_c', 'plants_count']) {
       const val = f.get(k);
@@ -783,7 +800,7 @@ async function onAction(e) {
     }
     case 'legend-open': {
       const b = map.getBounds();
-      const list = S.sites.filter(s => s.species_id === id && (ll => ll && b.contains(ll))(siteLatLng(s)));
+      const list = live().filter(s => s.species_id === id && (ll => ll && b.contains(ll))(siteLatLng(s)));
       if (list.length === 1) openSite(list[0].id);
       else openSheet(`${S.species[id]?.common_name || 'Weed'} sites on screen`, list.map(s => siteRow(s)).join('') || '<p class="empty">None on screen.</p>');
       break;
@@ -815,6 +832,16 @@ async function onAction(e) {
       renderSites(); closeSheet(); toast('Site deleted'); break;
     }
     case 'add-site': addSiteMenu(); break;
+    case 'archive-site': {
+      const site = S.sites.find(s => s.id === id);
+      site.archived = !site.archived;
+      site.archived_at = site.archived ? new Date().toISOString() : null;
+      await db.put('sites', site);
+      renderSites();
+      toast(site.archived ? 'Site archived. Find it under Sites > Archived.' : 'Site restored');
+      if (site.archived) renderSiteList(); else openSite(id);
+      break;
+    }
     case 'draw': startDraw(el.dataset.type, el.dataset.how); break;
     case 'suggest-order': suggestOrder(); break;
     case 'move': moveSite(id, Number(el.dataset.dir)); break;

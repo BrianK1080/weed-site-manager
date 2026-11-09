@@ -29,7 +29,7 @@ export function siteStatus(site, species, visits, now = new Date()) {
   const inWindow = species ? species.control_months.includes(now.getMonth() + 1) : false;
 
   let status;
-  if (site.status_override === 'monitoring' || site.status_override === 'eradicated' || (last && last.plants_found === false)) {
+  if (site.status_override === 'monitoring' || site.status_override === 'eradicated' || (last && last.plants_found === false && site.status_override !== 'active')) {
     status = 'monitoring';
   } else if (treatedVisit) {
     status = 'treated';
