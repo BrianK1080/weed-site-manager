@@ -485,7 +485,7 @@ function siteForm(id, geometry) {
     </div>
     <label>Route <select name="route_id">${routeOptions(site.route_id || '', 'None')}</select></label>
     <label>Access notes <textarea name="access_notes" rows="2">${h(site.access_notes || '')}</textarea></label>
-    <label>Status override <select name="status_override"><option value="">Normal</option><option value="monitoring" ${site.status_override === 'monitoring' ? 'selected' : ''}>Monitoring only</option><option value="eradicated" ${site.status_override === 'eradicated' ? 'selected' : ''}>Eradicated (keep watching)</option></select></label>
+    <label>Management status <select name="status_override"><option value="">Active management</option><option value="monitoring" ${site.status_override === 'monitoring' ? 'selected' : ''}>Monitoring only</option><option value="eradicated" ${site.status_override === 'eradicated' ? 'selected' : ''}>Eradicated (keep watching)</option></select></label>
     <label>Add photo <input type="file" name="photo" accept="image/*" capture="environment"></label>
     <div class="btns"><button class="primary" type="submit">Save site</button><button type="button" data-action="cancel-form" data-id="${id || ''}">Cancel</button></div>
     ${id ? `<div class="btns spaced"><button type="button" class="danger" data-action="delete-site" data-id="${id}">Delete this site</button></div>` : ''}
