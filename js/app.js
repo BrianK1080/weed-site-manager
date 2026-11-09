@@ -6,12 +6,12 @@ import { download, sitesCSV, chemicalRows, CHEM_COLS, toCSV, toGeoJSON, toKML, b
 
 /* ---------- basemaps (pluggable: add a provider here) ---------- */
 const BASEMAPS = {
-  map: { label: 'Map', layers: [{ url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', opts: { maxZoom: 20, maxNativeZoom: 19, attribution: '&copy; OpenStreetMap contributors' } }] },
-  sat: { label: 'Satellite', layers: [{ url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', opts: { maxZoom: 20, maxNativeZoom: 19, attribution: 'Imagery &copy; Esri, Maxar, Earthstar Geographics' } }] },
+  map: { label: 'Map', layers: [{ url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', opts: { maxZoom: 21, maxNativeZoom: 19, attribution: '&copy; OpenStreetMap contributors' } }] },
+  sat: { label: 'Satellite', layers: [{ url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', opts: { maxZoom: 21, maxNativeZoom: 18, attribution: 'Imagery &copy; Esri, Maxar, Earthstar Geographics' } }] },
   hybrid: { label: 'Sat + labels', layers: [
-    { url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', opts: { maxZoom: 20, maxNativeZoom: 19, attribution: 'Imagery &copy; Esri, Maxar, Earthstar Geographics' } },
-    { url: 'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}', opts: { maxZoom: 20, maxNativeZoom: 19 } },
-    { url: 'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}', opts: { maxZoom: 20, maxNativeZoom: 19 } },
+    { url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', opts: { maxZoom: 21, maxNativeZoom: 18, attribution: 'Imagery &copy; Esri, Maxar, Earthstar Geographics' } },
+    { url: 'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}', opts: { maxZoom: 21, maxNativeZoom: 18 } },
+    { url: 'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}', opts: { maxZoom: 21, maxNativeZoom: 18 } },
   ] },
 };
 const BASEMAP_ORDER = ['sat', 'hybrid', 'map'];
@@ -19,6 +19,7 @@ const HOME = [-37.585, 145.385]; // Steels Creek, Yarra Valley
 const AMBER = '#ffab00';
 const GREY = '#9e9e9e';
 const COLLAPSE_ZOOM = 15;
+const PALETTE = ['#ff6d00', '#6a1b9a', '#00897b', '#c0ca33', '#5d4037', '#d81b60', '#3949ab', '#7cb342', '#f4511e', '#00acc1'];
 
 const METHODS = { chip: 'Chip / dig', cut: 'Cut', pull: 'Hand-pull', spot_spray: 'Spot spray', wipe: 'Wipe / paint', inspect: 'Inspect only (no treatment)', other: 'Other' };
 const CHEM_METHODS = ['spot_spray', 'wipe', 'other'];
@@ -29,7 +30,7 @@ const STATUS_TEXT = { due: 'Due now', untreated: 'Not treated this season', trea
 /* ---------- state ---------- */
 const S = {
   species: {}, sites: [], visits: [], routes: [], settings: { id: 'settings', operator: '', basemap: 'sat', lastBackup: null },
-  hidden: new Set(), pos: null, follow: false, draw: null, tab: 'map', routeFilter: '', showAllToday: false,
+  hidden: new Set(), locFilter: '', pos: null, follow: false, draw: null, tab: 'map', routeFilter: '', showAllToday: false,
 };
 let map, baseLayers = [], siteLayer, posMarker, accCircle, drawLayer;
 
@@ -67,7 +68,11 @@ async function load() {
     const changed = [];
     for (const seed of SEED_SPECIES) {
       const cur = S.species[seed.id];
-      if (cur && !cur.seed_info && seed.seed_info) { cur.seed_info = seed.seed_info; changed.push(cur); }
+      if (!cur || !seed.seed_info) continue;
+      const si = { ...(cur.seed_info || {}) };
+      let added = false;
+      for (const [k, v] of Object.entries(seed.seed_info)) if (si[k] === undefined) { si[k] = v; added = true; }
+      if (added) { cur.seed_info = si; changed.push(cur); }
     }
     if (changed.length) await db.putMany('species', changed);
     await db.put('meta', { ...(settings0 || S.settings), id: 'settings', seedVersion: SEED_VERSION });
@@ -144,11 +149,11 @@ function renderSites() {
 function renderLegend() {
   const b = map.getBounds();
   const present = new Set(S.sites.filter(s => { const ll = siteLatLng(s); return ll && b.contains(ll); }).map(s => s.species_id));
-  const items = spList().filter(s => present.has(s.id) || S.hidden.has(s.id));
+  const items = spList().filter(s => present.has(s.id) || (S.hidden.has(s.id) && S.sites.some(x => x.species_id === s.id)));
   const el = $('#legend');
   if (!items.length) { el.hidden = true; return; }
   el.hidden = false;
-  el.innerHTML = `<div class="legend-items">${items.map(s => `<button class="legend-item ${S.hidden.has(s.id) ? 'off' : ''}" data-action="toggle-species" data-id="${s.id}"><span class="sw" style="background:${s.colour}"></span>${h(s.common_name)}</button>`).join('')}</div>
+  el.innerHTML = `<div class="legend-items">${items.map(s => `<div class="legend-row ${S.hidden.has(s.id) ? 'off' : ''}"><button class="legend-item" data-action="legend-open" data-id="${s.id}"><span class="sw" style="background:${s.colour}"></span>${h(s.common_name)}${S.hidden.has(s.id) ? ' <small>(hidden)</small>' : ''}</button><button class="legend-eye" data-action="toggle-species" data-id="${s.id}" title="${S.hidden.has(s.id) ? 'Show' : 'Hide'} on map" aria-label="${S.hidden.has(s.id) ? 'Show' : 'Hide'} ${h(s.common_name)} on map">${S.hidden.has(s.id) ? '○' : '◉'}</button></div>`).join('')}</div>
     <div class="legend-key"><span>${pointSVG('#666', 'untreated')} not treated</span><span>${pointSVG('#666', 'due')} due</span><span>${pointSVG('#666', 'treated')} treated</span><span>${pointSVG('#666', 'monitoring')} monitoring</span></div>`;
 }
 
@@ -220,7 +225,7 @@ function updateDrawBar() {
   const bar = $('#drawbar');
   if (!d) { bar.hidden = true; drawLayer.clearLayers(); return; }
   bar.hidden = false;
-  const what = d.type === 'point' ? 'Tap the map where the weeds are' : d.type === 'line' ? `Line: tap points along the run, or use GPS as you walk (${d.pts.length} points)` : `Area: tap the corners, or use GPS as you walk the edge (${d.pts.length} points)`;
+  const what = d.type === 'point' ? 'Tap the map where the weeds are' : `${d.type === 'line' ? 'Line' : 'Area'}: tap the map to add points anywhere (you don't need to be there), or "Add GPS point" to add where you're standing (${d.pts.length} points)`;
   $('#draw-msg').textContent = what;
   $('#draw-gps').hidden = d.type === 'point';
   $('#draw-undo').hidden = d.type === 'point';
@@ -298,7 +303,7 @@ function siteRow(site, extra = '') {
   const last = st.lastVisit ? `Last visit ${fmtDate(st.lastVisit.datetime)}` : 'Never visited';
   return `<div class="row" data-action="open-site" data-id="${site.id}">
     <span class="row-sym">${pointSVG(sp.colour, st.status)}</span>
-    <span class="row-main"><b>${h(site.name)}</b><small>${h(sp.common_name)} · ${h(TENURE[site.tenure] || '')}</small><small>${last}${d != null ? ' · ' + fmtDist(d) : ''}</small></span>
+    <span class="row-main"><b>${h(site.name)}</b><small>${h(sp.common_name)} · ${h(site.location_id || TENURE[site.tenure] || '')}</small><small>${last}${d != null ? ' · ' + fmtDist(d) : ''}</small></span>
     <span class="row-side">${badge(st.status)}${extra}</span></div>`;
 }
 
@@ -338,11 +343,14 @@ function renderToday() {
 function renderSiteList(filterText = '') {
   const q = filterText.toLowerCase();
   let list = S.sites.filter(s => !S.routeFilter || s.route_id === S.routeFilter)
-    .filter(s => !q || s.name.toLowerCase().includes(q) || (S.species[s.species_id]?.common_name || '').toLowerCase().includes(q));
+    .filter(s => !S.locFilter || s.location_id === S.locFilter)
+    .filter(s => !q || (s.location_id || '').toLowerCase().includes(q) || s.name.toLowerCase().includes(q) || (S.species[s.species_id]?.common_name || '').toLowerCase().includes(q));
   sortForRoute(list);
   const reorder = !!S.routeFilter;
   const html = `<div class="controls"><input type="search" placeholder="Search sites or weeds" value="${h(filterText)}" data-action="site-search">
-    <label>Route <select data-action="route-filter-sites">${routeOptions(S.routeFilter)}</select></label></div>
+    <label>Route <select data-action="route-filter-sites">${routeOptions(S.routeFilter)}</select></label>
+    <label>Property / ID <select data-action="loc-filter"><option value="">All</option>${[...new Set(S.sites.map(x => x.location_id).filter(Boolean))].sort().map(l => `<option ${S.locFilter === l ? 'selected' : ''}>${h(l)}</option>`).join('')}</select></label></div>
+    ${S.locFilter ? `<p class="muted">${list.length} site${list.length === 1 ? '' : 's'} at ${h(S.locFilter)}.</p>` : ''}
     ${reorder ? '<p class="muted">Use the arrows to set the visit order for this route.</p>' : ''}
     ${list.length ? list.map((s, i) => siteRow(s, reorder ? `<span class="arrows"><button data-action="move" data-id="${s.id}" data-dir="-1" ${i === 0 ? 'disabled' : ''}>▲</button><button data-action="move" data-id="${s.id}" data-dir="1" ${i === list.length - 1 ? 'disabled' : ''}>▼</button></span>` : '')).join('') : '<p class="empty">No sites match.</p>'}
     <div class="btns"><button data-action="add-site">+ Add site</button></div>`;
@@ -389,6 +397,8 @@ async function openSite(id) {
       ${ll ? `<a class="button" href="https://www.google.com/maps/dir/?api=1&destination=${ll[0]},${ll[1]}" target="_blank" rel="noopener">Directions</a>` : ''}
     </div>
     <dl class="facts">
+      <dt>Status</dt><dd>${STATUS_TEXT[st.status]}${site.status_override ? ` (set to ${site.status_override})` : ''}${st.lastVisit ? ` · last visit ${h(visitWhen(st.lastVisit))}` : ''}</dd>
+      ${site.location_id ? `<dt>Property / ID</dt><dd>${h(site.location_id)}</dd>` : ''}
       <dt>Land</dt><dd>${h(TENURE[site.tenure] || '-')}${site.land_manager ? ' · ' + h(site.land_manager) : ''}</dd>
       ${site.tenure !== 'private' ? `<dt>Permission</dt><dd>${h(site.permission_ref) || '<span class="warn-text">None recorded</span>'}</dd>` : ''}
       <dt>Shape</dt><dd>${{ Point: 'Point', LineString: 'Line', Polygon: 'Area' }[site.geometry?.type] || '-'}${site.size_value != null ? ` · ${site.size_value} ${h(site.size_unit)}` : ''}</dd>
@@ -401,7 +411,9 @@ async function openSite(id) {
     </dl>
     ${sp.preferred_methods ? `<p><b>Method:</b> ${h(sp.preferred_methods)}</p>` : ''}
     ${sp.cautions ? `<p><b>Caution:</b> ${h(sp.cautions)}</p>` : ''}
-    ${sp.seed_info && (sp.seed_info.seed_bank || sp.seed_info.seeds || sp.seed_info.spread) ? `<div class="seedbox"><b>If left to seed</b>
+    ${(sp.herbicides || []).length ? `<div class="seedbox"><b>Your herbicides for this weed</b>${sp.herbicides.map(x => `<p>${h(x.product)}${x.active ? ` <span class="muted">(${h(x.active)})</span>` : ''}${x.notes ? ` · ${h(x.notes)}` : ''}${x.label_url ? ` · <a href="${h(x.label_url)}" target="_blank" rel="noopener">label</a>` : ''}</p>`).join('')}<p class="small muted">Your own list. Always follow the product label.</p></div>` : ''}
+    ${sp.seed_info && (sp.seed_info.seed_bank || sp.seed_info.seeds || sp.seed_info.spread || sp.seed_info.seed_set) ? `<div class="seedbox"><b>If left to seed</b>
+      ${sp.seed_info.seed_set ? `<p><span class="muted">Seed set:</span> ${h(sp.seed_info.seed_set)}${sp.seed_info.seed_set_source ? ` <a class="small" href="${h(sp.seed_info.seed_set_source)}" target="_blank" rel="noopener">source</a>` : ''}</p>` : ''}
       ${sp.seed_info.seeds ? `<p><span class="muted">Seed:</span> ${h(sp.seed_info.seeds)}</p>` : ''}
       ${sp.seed_info.seed_bank ? `<p><span class="muted">Seed bank:</span> ${h(sp.seed_info.seed_bank)}</p>` : ''}
       ${sp.seed_info.spread ? `<p><span class="muted">Spreads by:</span> ${h(sp.seed_info.spread)}</p>` : ''}
@@ -409,14 +421,13 @@ async function openSite(id) {
     ${links ? `<p class="links">${links}</p>` : ''}
     <div class="photos" id="site-photos"></div>
     <h3>Visit history (${visits.length})</h3>
-    ${visits.length ? visits.map(v => `<div class="visit"><b>${visitWhen(v)}</b> · ${h(METHODS[v.method] || v.method)}${v.plants_found === false ? ' · no plants found' : ''}${v.percent_treated != null && v.method !== 'inspect' ? ` · ${v.percent_treated}%` : ''}
+    ${visits.length ? visits.map(v => `<div class="visit"><b>${visitWhen(v)}</b> · ${h(METHODS[v.method] || v.method)}${v.plants_found === false ? ' · no plants found' : ''}${v.plants_count != null ? ` · ${v.plants_count} plants` : ''}${v.percent_treated != null && v.method !== 'inspect' ? ` · ${v.percent_treated}%` : ''}
       ${v.product_trade_name ? `<br><small>${h(v.product_trade_name)}${v.rate ? ' @ ' + h(v.rate) : ''}${v.wind_speed_kmh ? ` · wind ${h(v.wind_speed_kmh)} km/h ${h(v.wind_direction)}` : ''}</small>` : ''}
       ${v.notes ? `<br><small>${h(v.notes)}</small>` : ''}
       <br><button class="link" data-action="edit-visit" data-id="${v.id}">Edit</button></div>`).join('') : '<p class="muted">No visits yet.</p>'}
     <div class="btns spaced">
       <button data-action="edit-site" data-id="${id}">Edit details</button>
       <button data-action="redraw-site" data-id="${id}">Redraw shape</button>
-      <button class="danger" data-action="delete-site" data-id="${id}">Delete site</button>
     </div>`;
   openSheet(site.name, html);
   renderPhotos('#site-photos', site.photos || []);
@@ -437,12 +448,30 @@ async function renderPhotos(sel, ids) {
 }
 
 /* ---------- Site form ---------- */
+// Match a typed weed name to the list (common or scientific, any case); otherwise add it as a new weed.
+async function resolveSpecies(typed) {
+  const name = String(typed || '').trim();
+  const lc = name.toLowerCase();
+  const hit = Object.values(S.species).find(s => s.common_name.toLowerCase() === lc || (s.scientific_name || '').toLowerCase() === lc);
+  if (hit) return hit.id;
+  const used = new Set(Object.values(S.species).map(s => s.colour));
+  const rec = { id: uid('sp'), common_name: name, scientific_name: '', native: false, colour: PALETTE.find(c => !used.has(c)) || PALETTE[0],
+    season_start_month: 1, control_months: [], scouting_months: [], preferred_methods: '', cautions: '', links: {}, seed_info: {}, herbicides: [] };
+  await db.put('species', rec);
+  S.species[rec.id] = rec;
+  toast(`"${name}" added as a new weed. Set its control months in More > Weeds.`, 4500);
+  return rec.id;
+}
 function siteForm(id, geometry) {
   const site = id ? S.sites.find(s => s.id === id) : { geometry, tenure: 'private', density: 3, priority: 2, photos: [] };
   const sz = geometry ? geometrySize(geometry) : null;
   const html = `<form id="site-form">
-    <label>Weed <select name="species_id" required><option value="">Choose…</option>${spList().map(s => `<option value="${s.id}" ${site.species_id === s.id ? 'selected' : ''}>${h(s.common_name)}</option>`).join('')}</select></label>
+    <label>Weed <input name="species_name" list="weed-list" required autocomplete="off" placeholder="Start typing, or pick from the list" value="${h(S.species[site.species_id]?.common_name || '')}"></label>
+    <datalist id="weed-list">${spList().map(s => `<option value="${h(s.common_name)}">${h(s.scientific_name || '')}</option>`).join('')}</datalist>
+    <p class="muted small">A name that isn't on the list is added as a new weed; set its months later in More > Weeds.</p>
     <label>Site name <input name="name" required value="${h(site.name || '')}" placeholder="e.g. Front gate thistles"></label>
+    <label>Property address or site ID <input name="location_id" list="loc-list" autocomplete="off" value="${h(site.location_id || '')}" placeholder="e.g. 123 Steels Creek Rd, or RS-01"></label>
+    <datalist id="loc-list">${[...new Set(S.sites.map(x => x.location_id).filter(Boolean))].sort().map(l => `<option value="${h(l)}">`).join('')}</datalist>
     <label>Land <select name="tenure">${Object.entries(TENURE).map(([k, v]) => `<option value="${k}" ${site.tenure === k ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
     <label>Land manager <input name="land_manager" value="${h(site.land_manager || '')}" placeholder="Me / Yarra Ranges Council / …"></label>
     <label>Permission reference (public land) <input name="permission_ref" value="${h(site.permission_ref || '')}" placeholder="Council approval no. or date"></label>
@@ -459,6 +488,7 @@ function siteForm(id, geometry) {
     <label>Status override <select name="status_override"><option value="">Normal</option><option value="monitoring" ${site.status_override === 'monitoring' ? 'selected' : ''}>Monitoring only</option><option value="eradicated" ${site.status_override === 'eradicated' ? 'selected' : ''}>Eradicated (keep watching)</option></select></label>
     <label>Add photo <input type="file" name="photo" accept="image/*" capture="environment"></label>
     <div class="btns"><button class="primary" type="submit">Save site</button><button type="button" data-action="cancel-form" data-id="${id || ''}">Cancel</button></div>
+    ${id ? `<div class="btns spaced"><button type="button" class="danger" data-action="delete-site" data-id="${id}">Delete this site</button></div>` : ''}
   </form>`;
   openSheet(id ? 'Edit site' : 'New site', html);
   $('#site-form').addEventListener('submit', async e => {
@@ -466,7 +496,8 @@ function siteForm(id, geometry) {
     const f = new FormData(e.target);
     const isNew = !id;
     const s = isNew ? { id: uid('site'), created_at: new Date().toISOString(), geometry, photos: [] } : site;
-    for (const k of ['species_id', 'name', 'tenure', 'land_manager', 'permission_ref', 'size_unit', 'route_id', 'access_notes', 'status_override']) s[k] = (f.get(k) || '').toString().trim() || (k === 'status_override' || k === 'route_id' ? null : '');
+    s.species_id = await resolveSpecies(f.get('species_name'));
+    for (const k of ['name', 'location_id', 'tenure', 'land_manager', 'permission_ref', 'size_unit', 'route_id', 'access_notes', 'status_override']) s[k] = (f.get(k) || '').toString().trim() || (k === 'status_override' || k === 'route_id' ? null : '');
     for (const k of ['density', 'priority', 'size_value']) s[k] = f.get(k) === '' ? null : Number(f.get(k));
     if (s.route_id && s.route_order == null) s.route_order = S.sites.filter(x => x.route_id === s.route_id).length;
     const file = f.get('photo');
@@ -511,7 +542,8 @@ function visitForm(siteId, visitId) {
     operator: S.settings.operator || '', method: 'chip', plants_found: true, percent_treated: 100,
     situation: site.tenure === 'roadside' ? 'Roadside (non-crop)' : site.tenure === 'other' ? 'Non-crop public land' : 'Pasture / private land',
   };
-  const products = [...new Set(S.visits.map(x => x.product_trade_name).filter(Boolean))];
+  const own = S.species[site.species_id]?.herbicides || [];
+  const products = [...new Set([...own.map(x => x.product), ...S.visits.map(x => x.product_trade_name)].filter(Boolean))];
   const html = `<form id="visit-form">
     <p class="muted">${h(site.name)} · ${h(S.species[site.species_id]?.common_name || '')}</p>
     <div class="grid3">
@@ -526,6 +558,7 @@ function visitForm(siteId, visitId) {
       <label class="chk"><input type="checkbox" name="plants_found" ${v.plants_found !== false ? 'checked' : ''}> Plants found</label>
       <label>% of site treated <input type="number" name="percent_treated" min="0" max="100" value="${h(v.percent_treated ?? '')}"></label>
     </div>
+    <label>Number of plants found (optional) <input type="number" name="plants_count" min="0" inputmode="numeric" value="${h(v.plants_count ?? '')}"></label>
     <fieldset id="chem" ${CHEM_METHODS.includes(v.method) ? '' : 'hidden'}>
       <legend>Chemical use record (Victoria: within 48 hours, keep 2 years)</legend>
       <label>Product trade name <input name="product_trade_name" list="products" value="${h(v.product_trade_name || '')}"><datalist id="products">${products.map(p => `<option value="${h(p)}">`).join('')}</datalist></label>
@@ -551,6 +584,10 @@ function visitForm(siteId, visitId) {
   openSheet(visitId ? 'Edit visit' : 'Log visit', html);
   const form = $('#visit-form');
   form.method.addEventListener('change', () => { $('#chem').hidden = !CHEM_METHODS.includes(form.method.value); });
+  form.product_trade_name.addEventListener('change', () => {
+    const m = own.find(x => x.product === form.product_trade_name.value);
+    if (m && m.active && !form.active_ingredient.value) form.active_ingredient.value = m.active;
+  });
   form.addEventListener('submit', async e => {
     e.preventDefault();
     const f = new FormData(form);
@@ -568,7 +605,7 @@ function visitForm(siteId, visitId) {
     rec.method = method;
     rec.plants_found = f.get('plants_found') === 'on';
     for (const k of ['product_trade_name', 'active_ingredient', 'rate', 'volume_used', 'situation', 'wind_direction', 'notes']) rec[k] = CHEM_METHODS.includes(method) || k === 'notes' ? String(f.get(k) || '').trim() : '';
-    for (const k of ['percent_treated', 'kill_percent_followup', 'wind_speed_kmh', 'temp_c']) {
+    for (const k of ['percent_treated', 'kill_percent_followup', 'wind_speed_kmh', 'temp_c', 'plants_count']) {
       const val = f.get(k);
       rec[k] = val === '' || val == null || (!CHEM_METHODS.includes(method) && ['wind_speed_kmh', 'temp_c'].includes(k)) ? null : Number(val);
     }
@@ -639,6 +676,13 @@ function renderMore() {
   if (navigator.storage && navigator.storage.persisted) navigator.storage.persisted().then(p => { const el = $('#persist-status'); if (el) el.textContent = p ? 'Storage: protected from automatic clearing.' : 'Storage: the browser may clear it under pressure. Back up regularly.'; });
 }
 
+const herbRow = x => `<div class="herb-row">
+  <input name="h_product" placeholder="Product (trade name)" value="${h(x.product || '')}">
+  <input name="h_active" placeholder="Active ingredient" value="${h(x.active || '')}">
+  <input name="h_notes" placeholder="Notes (e.g. when you use it)" value="${h(x.notes || '')}">
+  <input name="h_label" type="url" placeholder="Label link (optional)" value="${h(x.label_url || '')}">
+  <button type="button" class="link danger herb-del">Remove</button></div>`;
+
 function speciesForm(id) {
   const s = id ? S.species[id] : { colour: '#ff5722', season_start_month: 1, control_months: [], scouting_months: [], links: {} };
   const monthBoxes = (name, sel) => `<div class="months">${MONTHS.map((m, i) => `<label><input type="checkbox" name="${name}" value="${i + 1}" ${sel.includes(i + 1) ? 'checked' : ''}>${m}</label>`).join('')}</div>`;
@@ -652,15 +696,21 @@ function speciesForm(id) {
     <p><b>Scouting months</b></p>${monthBoxes('scouting_months', s.scouting_months || [])}
     <label>Preferred methods <textarea name="preferred_methods" rows="2">${h(s.preferred_methods || '')}</textarea></label>
     <label>Cautions <textarea name="cautions" rows="2">${h(s.cautions || '')}</textarea></label>
+    <label>Seed set (when, how long after flowering) <textarea name="seed_set" rows="2">${h(s.seed_info?.seed_set || '')}</textarea></label>
     <label>Seed production <textarea name="seed_seeds" rows="2">${h(s.seed_info?.seeds || '')}</textarea></label>
     <label>Seed bank (how long seed survives in soil) <textarea name="seed_bank" rows="2">${h(s.seed_info?.seed_bank || '')}</textarea></label>
     <label>Spreads by <textarea name="seed_spread" rows="2">${h(s.seed_info?.spread || '')}</textarea></label>
     <label>Seed info source link <input name="seed_source" type="url" value="${h(s.seed_info?.source || '')}"></label>
     <label>Info link <input name="link" type="url" value="${h(s.links?.council || '')}"></label>
+    <p><b>Your herbicides for this weed</b> <span class="muted small">(your own notes; follow the label)</span></p>
+    <div id="herb-rows">${(s.herbicides || []).map(herbRow).join('')}</div>
+    <div class="btns"><button type="button" id="herb-add">+ Add herbicide</button></div>
     <div class="btns"><button class="primary" type="submit">Save</button><button type="button" data-action="tab" data-tab="more">Cancel</button>
     ${id && !S.sites.some(x => x.species_id === id) ? `<button type="button" class="danger" data-action="delete-species" data-id="${id}">Delete</button>` : ''}</div>
   </form>`;
   openSheet(id ? 'Edit weed' : 'Add weed', html);
+  $('#herb-add').addEventListener('click', () => $('#herb-rows').insertAdjacentHTML('beforeend', herbRow({})));
+  $('#herb-rows').addEventListener('click', e => { if (e.target.classList.contains('herb-del')) e.target.closest('.herb-row').remove(); });
   $('#sp-form').addEventListener('submit', async e => {
     e.preventDefault();
     const f = new FormData(e.target);
@@ -675,7 +725,11 @@ function speciesForm(id) {
     rec.preferred_methods = f.get('preferred_methods').trim();
     rec.cautions = f.get('cautions').trim();
     rec.links = { ...(rec.links || {}), council: f.get('link').trim() };
-    rec.seed_info = { seeds: f.get('seed_seeds').trim(), seed_bank: f.get('seed_bank').trim(), spread: f.get('seed_spread').trim(), source: f.get('seed_source').trim() };
+    rec.herbicides = [...document.querySelectorAll('#herb-rows .herb-row')].map(r => ({
+      product: r.querySelector('[name=h_product]').value.trim(), active: r.querySelector('[name=h_active]').value.trim(),
+      notes: r.querySelector('[name=h_notes]').value.trim(), label_url: r.querySelector('[name=h_label]').value.trim(),
+    })).filter(x => x.product || x.active);
+    rec.seed_info = { ...(rec.seed_info || {}), seed_set: f.get('seed_set').trim(), seeds: f.get('seed_seeds').trim(), seed_bank: f.get('seed_bank').trim(), spread: f.get('seed_spread').trim(), source: f.get('seed_source').trim() };
     await db.put('species', rec);
     S.species[rec.id] = rec;
     renderSites();
@@ -719,10 +773,21 @@ async function onAction(e) {
   if (!el) return;
   const a = el.dataset.action;
   const id = el.dataset.id;
-  if (['route-filter', 'route-filter-sites', 'today-all', 'site-search', 'rec-from', 'rec-to', 'restore'].includes(a) && e.type === 'click') return;
+  if (['route-filter', 'route-filter-sites', 'loc-filter', 'today-all', 'site-search', 'rec-from', 'rec-to', 'restore'].includes(a) && e.type === 'click') return;
   switch (a) {
     case 'tab': showTab(el.dataset.tab); break;
-    case 'toggle-species': S.hidden.has(id) ? S.hidden.delete(id) : S.hidden.add(id); renderSites(); break;
+    case 'toggle-species': {
+      const name = S.species[id]?.common_name || 'Weed';
+      if (S.hidden.has(id)) { S.hidden.delete(id); toast(`${name} shown`); } else { S.hidden.add(id); toast(`${name} hidden on the map. Tap ○ to show it again.`); }
+      renderSites(); break;
+    }
+    case 'legend-open': {
+      const b = map.getBounds();
+      const list = S.sites.filter(s => s.species_id === id && (ll => ll && b.contains(ll))(siteLatLng(s)));
+      if (list.length === 1) openSite(list[0].id);
+      else openSheet(`${S.species[id]?.common_name || 'Weed'} sites on screen`, list.map(s => siteRow(s)).join('') || '<p class="empty">None on screen.</p>');
+      break;
+    }
     case 'open-site': openSite(id); break;
     case 'zoom-site': { const site = S.sites.find(s => s.id === id); zoomTo(site); hideSheet(); showTab('map', false); break; }
     case 'log-visit': visitForm(id); break;
@@ -786,6 +851,7 @@ function onChange(e) {
   const a = el.dataset.action;
   if (a === 'route-filter') { S.routeFilter = el.value; renderToday(); }
   if (a === 'route-filter-sites') { S.routeFilter = el.value; renderSiteList(); }
+  if (a === 'loc-filter') { S.locFilter = el.value; renderSiteList(); }
   if (a === 'today-all') { S.showAllToday = el.checked; renderToday(); }
   if (a === 'rec-from' || a === 'rec-to') renderRecords($('[data-action="rec-from"]').value, $('[data-action="rec-to"]').value);
   if (a === 'restore' && el.files[0]) doRestore(el.files[0]);

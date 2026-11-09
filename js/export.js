@@ -44,6 +44,7 @@ export function sitesCSV(data) {
       decimalLongitude: ll[1] != null ? ll[1].toFixed(6) : '',
       eventDate: site.created_at ? localDate(site.created_at) : '',
       occurrenceRemarks: site.access_notes || '',
+      locality: site.location_id || '',
       site_name: site.name,
       geometry_type: site.geometry ? site.geometry.type : '',
       size: site.size_value != null ? `${site.size_value} ${site.size_unit || ''}`.trim() : '',

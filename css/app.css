@@ -15,6 +15,8 @@
 [hidden] { display: none !important; }
 html, body { margin: 0; height: 100%; font: 15px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: var(--text); overflow: hidden; }
 button, .button, input, select, textarea { font: inherit; }
+/* 16px stops iPhone Safari zooming the page when a field is tapped */
+input, select, textarea { font-size: 16px !important; }
 
 #topbar {
   position: fixed; top: 0; left: 0; right: 0; z-index: 1000;
@@ -51,7 +53,13 @@ button, .button, input, select, textarea { font: inherit; }
 }
 .legend-items { display: flex; flex-direction: column; gap: 2px; }
 .legend-item { display: flex; align-items: center; gap: 6px; border: 0; background: none; padding: 3px 0; min-height: 0; border-radius: 0; text-align: left; cursor: pointer; }
-.legend-item.off { opacity: .4; text-decoration: line-through; }
+.legend-row { display: flex; align-items: center; gap: 4px; }
+.legend-row .legend-item { flex: 1; }
+.legend-row.off .legend-item { opacity: .5; }
+.legend-eye { border: 0; background: none; min-height: 0; padding: 2px 6px; font-size: 16px; color: var(--muted); cursor: pointer; }
+.herb-row { display: grid; gap: 4px; padding: 6px; border: 1px solid var(--line); border-radius: 8px; margin: 6px 0; }
+.herb-row input { width: 100%; padding: 8px; border: 1px solid #c8d1cc; border-radius: 6px; }
+
 .legend-key { display: flex; flex-wrap: wrap; gap: 2px 8px; margin-top: 4px; padding-top: 4px; border-top: 1px solid var(--line); color: var(--muted); font-size: 11px; }
 .legend-key span { display: inline-flex; align-items: center; }
 .legend-key svg { width: 18px; height: 18px; }
