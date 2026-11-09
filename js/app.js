@@ -6,7 +6,7 @@ import { download, sitesCSV, chemicalRows, CHEM_COLS, toCSV, toGeoJSON, toKML, b
 
 /* ---------- basemaps (pluggable: add a provider here) ---------- */
 // Keep in step with VERSION in sw.js; shown under More > About so you can tell which version is running.
-const APP_VERSION = 8;
+const APP_VERSION = 9;
 
 const BASEMAPS = {
   map: { label: 'Map', layers: [{ url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', opts: { maxZoom: 21, maxNativeZoom: 19, attribution: '&copy; OpenStreetMap contributors' } }] },
@@ -74,9 +74,11 @@ async function load() {
     const changed = [];
     for (const seed of SEED_SPECIES) {
       const cur = S.species[seed.id];
-      if (!cur || !seed.seed_info) continue;
-      const si = { ...(cur.seed_info || {}) };
+      if (!cur) continue;
       let added = false;
+      if (cur.wons === undefined && seed.wons !== undefined) { cur.wons = seed.wons; added = true; }
+      if (!seed.seed_info) { if (added) changed.push(cur); continue; }
+      const si = { ...(cur.seed_info || {}) };
       for (const [k, v] of Object.entries(seed.seed_info)) if (si[k] === undefined) { si[k] = v; added = true; }
       if (added) { cur.seed_info = si; changed.push(cur); }
     }
@@ -449,6 +451,44 @@ async function suggestOrder() {
   renderToday();
 }
 
+/* ---------- weed info (shared by the site page and the weed page) ---------- */
+const APVMA_URL = 'https://portal.apvma.gov.au/pubcris';
+const searchWA = q => `https://weeds.org.au/?s=${encodeURIComponent(q)}`;
+const searchALA = q => `https://bie.ala.org.au/search?q=${encodeURIComponent(q)}`;
+// Links for a weed. Weeds Australia and the Atlas of Living Australia are always offered:
+// if none is stored, a search on the weed's name is used.
+function weedLinks(sp) {
+  const l = sp.links || {};
+  const sci = (sp.scientific_name || '').trim(), com = (sp.common_name || '').trim();
+  const out = [];
+  const wa = l.weeds_australia || (com || sci ? searchWA(com || sci) : '');
+  const ala = l.ala || (sci || com ? searchALA(sci || com) : '');
+  if (wa) out.push(['Weeds Australia', wa]);
+  if (ala) out.push(['Atlas of Living Australia', ala]);
+  if (l.agvic) out.push(['Agriculture Victoria', l.agvic]);
+  if (l.council) out.push(['More info', l.council]);
+  return out;
+}
+function weedInfoHTML(sp, full = false) {
+  const si = sp.seed_info || {};
+  const herbs = sp.herbicides || [];
+  const links = weedLinks(sp).map(([t, u]) => `<a href="${h(u)}" target="_blank" rel="noopener">${t}</a>`).join(' · ');
+  return `
+    ${sp.preferred_methods ? `<p><b>Method:</b> ${h(sp.preferred_methods)}</p>` : ''}
+    ${sp.cautions ? `<p><b>Caution:</b> ${h(sp.cautions)}</p>` : ''}
+    ${herbs.length || full ? `<div class="seedbox"><b>Your herbicides for this weed</b>${herbs.length ? herbs.map(x => `<p>${h(x.product)}${x.active ? ` <span class="muted">(${h(x.active)})</span>` : ''}${x.notes ? ` · ${h(x.notes)}` : ''}${x.label_url ? ` · <a href="${h(x.label_url)}" target="_blank" rel="noopener">label</a>` : ''}</p>`).join('') : '<p class="muted">None added yet. Tap Edit to add the products you use.</p>'}<p class="small muted">Your own list. Always follow the product label. To find products registered for this weed, see the weed's Agriculture Victoria or Weeds Australia page, or search the <a href="${APVMA_URL}" target="_blank" rel="noopener">APVMA register (PubCRIS)</a>.</p></div>` : ''}
+    ${si.seed_bank || si.seeds || si.spread || si.seed_set ? `<div class="seedbox"><b>If left to seed</b>
+      ${si.seed_set ? `<p><span class="muted">Seed set:</span> ${h(si.seed_set)}${si.seed_set_source ? ` <a class="small" href="${h(si.seed_set_source)}" target="_blank" rel="noopener">source</a>` : ''}</p>` : ''}
+      ${si.seeds ? `<p><span class="muted">Seed:</span> ${h(si.seeds)}</p>` : ''}
+      ${si.seed_bank ? `<p><span class="muted">Seed bank:</span> ${h(si.seed_bank)}</p>` : ''}
+      ${si.spread ? `<p><span class="muted">Spreads by:</span> ${h(si.spread)}</p>` : ''}
+      ${si.source ? `<p class="small"><a href="${h(si.source)}" target="_blank" rel="noopener">Source</a></p>` : ''}</div>` : ''}
+    ${links ? `<p class="links">${links}</p>` : ''}`;
+}
+function weedTags(sp) {
+  return `${sp.wons ? '<span class="tag wons" title="Weed of National Significance">WoNS</span>' : ''}${sp.native ? '<span class="tag">Native</span>' : ''}`;
+}
+
 /* ---------- Site detail ---------- */
 async function openSite(id) {
   const site = S.sites.find(s => s.id === id);
@@ -458,9 +498,8 @@ async function openSite(id) {
   const ll = siteLatLng(site);
   const visits = S.visits.filter(v => v.site_id === id).sort((a, b) => b.datetime.localeCompare(a.datetime));
   const route = S.routes.find(r => r.id === site.route_id);
-  const links = Object.entries(sp.links || {}).filter(([, u]) => u).map(([k, u]) => `<a href="${h(u)}" target="_blank" rel="noopener">${{ weeds_australia: 'Weeds Australia', ala: 'Atlas of Living Australia', agvic: 'Agriculture Victoria', council: 'More info' }[k] || k}</a>`).join(' · ');
   const html = `
-    <div class="site-head"><span class="sw big" style="background:${sp.colour}"></span><div><b>${h(sp.common_name)}</b><br><i class="muted">${h(sp.scientific_name)}</i></div></div>
+    <div class="site-head"><span class="sw big" style="background:${sp.colour}"></span><div><b>${h(sp.common_name)}</b> ${weedTags(sp)}<br><i class="muted">${h(sp.scientific_name)}</i></div></div>
     <p>${badge(st.status)} <span class="muted">Season ${seasonLabel(new Date(), sp.season_start_month || 1)} · ${h(st.nextWindow)}</span>${st.percentTreated != null && st.percentTreated < 100 ? ` <span class="muted">· ${st.percentTreated}% treated</span>` : ''}</p>
     ${site.deleted ? `<div class="note warn">Deleted ${fmtDate(site.deleted_at)}. Hidden everywhere except Sites > Deleted.<div class="btns"><button data-action="restore-site" data-id="${id}">Restore</button><button class="danger" data-action="purge-site" data-id="${id}">Delete permanently</button></div></div>` : ''}
     ${!site.deleted && site.archived ? `<div class="note warn">Archived ${fmtDate(site.archived_at)}. Hidden from the map, Today and routes. <button class="link" data-action="archive-site" data-id="${id}">Restore</button></div>` : ''}
@@ -483,16 +522,7 @@ async function openSite(id) {
       <dt>Location</dt><dd>${ll ? `${ll[0].toFixed(6)}, ${ll[1].toFixed(6)}` : '-'}</dd>
       ${site.access_notes ? `<dt>Notes</dt><dd>${h(site.access_notes)}</dd>` : ''}
     </dl>
-    ${sp.preferred_methods ? `<p><b>Method:</b> ${h(sp.preferred_methods)}</p>` : ''}
-    ${sp.cautions ? `<p><b>Caution:</b> ${h(sp.cautions)}</p>` : ''}
-    ${(sp.herbicides || []).length ? `<div class="seedbox"><b>Your herbicides for this weed</b>${sp.herbicides.map(x => `<p>${h(x.product)}${x.active ? ` <span class="muted">(${h(x.active)})</span>` : ''}${x.notes ? ` · ${h(x.notes)}` : ''}${x.label_url ? ` · <a href="${h(x.label_url)}" target="_blank" rel="noopener">label</a>` : ''}</p>`).join('')}<p class="small muted">Your own list. Always follow the product label.</p></div>` : ''}
-    ${sp.seed_info && (sp.seed_info.seed_bank || sp.seed_info.seeds || sp.seed_info.spread || sp.seed_info.seed_set) ? `<div class="seedbox"><b>If left to seed</b>
-      ${sp.seed_info.seed_set ? `<p><span class="muted">Seed set:</span> ${h(sp.seed_info.seed_set)}${sp.seed_info.seed_set_source ? ` <a class="small" href="${h(sp.seed_info.seed_set_source)}" target="_blank" rel="noopener">source</a>` : ''}</p>` : ''}
-      ${sp.seed_info.seeds ? `<p><span class="muted">Seed:</span> ${h(sp.seed_info.seeds)}</p>` : ''}
-      ${sp.seed_info.seed_bank ? `<p><span class="muted">Seed bank:</span> ${h(sp.seed_info.seed_bank)}</p>` : ''}
-      ${sp.seed_info.spread ? `<p><span class="muted">Spreads by:</span> ${h(sp.seed_info.spread)}</p>` : ''}
-      ${sp.seed_info.source ? `<p class="small"><a href="${h(sp.seed_info.source)}" target="_blank" rel="noopener">Source</a></p>` : ''}</div>` : ''}
-    ${links ? `<p class="links">${links}</p>` : ''}
+    ${weedInfoHTML(sp)}
     <div class="photos" id="site-photos"></div>
     <h3>Visit history (${visits.length})</h3>
     ${visits.length ? visits.map(v => `<div class="visit"><b>${visitWhen(v)}</b> · ${h(METHODS[v.method] || v.method)}${v.plants_found === false ? ' · no plants found' : ''}${v.plants_count != null ? ` · ${v.plants_count} plants` : ''}${v.status_after && v.status_after !== 'active' ? ` · → ${v.status_after === 'monitoring' ? 'Monitoring' : 'Eradicated'}` : ''}${v.percent_treated != null && v.method !== 'inspect' && v.plants_found !== false ? ` · ${v.percent_treated}%` : ''}
@@ -737,7 +767,7 @@ function renderMore() {
     ${S.routes.map(r => `<div class="row"><span class="row-main"><b>${h(r.name)}</b><small>${S.sites.filter(s => s.route_id === r.id).length} sites</small></span><span class="row-side"><button class="link" data-action="rename-route" data-id="${r.id}">Rename</button> <button class="link danger" data-action="delete-route" data-id="${r.id}">Delete</button></span></div>`).join('') || '<p class="muted">No routes yet, e.g. "Property loop" or "Steels Creek Rd walk".</p>'}
     <form id="route-form" class="inline"><input name="name" placeholder="New route name" required><button type="submit">Add route</button></form>
     <h3>Weeds</h3>
-    ${spList().map(s => `<div class="row" data-action="edit-species" data-id="${s.id}"><span class="sw" style="background:${s.colour}"></span><span class="row-main"><b>${h(s.common_name)}</b><small>Control: ${monthsText(s.control_months)} · season starts ${MONTHS[s.season_start_month - 1]}</small></span></div>`).join('')}
+    ${spList().map(s => `<div class="row" data-action="edit-species" data-id="${s.id}"><span class="sw" style="background:${s.colour}"></span><span class="row-main"><b>${h(s.common_name)}</b> ${weedTags(s)}<small>Control: ${monthsText(s.control_months)} · season starts ${MONTHS[s.season_start_month - 1]}</small></span></div>`).join('')}
     <div class="btns"><button data-action="edit-species" data-id="">+ Add weed</button></div>
     <h3>Settings</h3>
     <form id="settings-form" class="inline"><input name="operator" placeholder="Your name (operator)" value="${h(S.settings.operator)}"><button type="submit">Save</button></form>
@@ -773,15 +803,38 @@ const herbRow = x => `<div class="herb-row">
   <input name="h_label" type="url" placeholder="Label link (optional)" value="${h(x.label_url || '')}">
   <button type="button" class="link danger herb-del">Remove</button></div>`;
 
+function speciesView(id) {
+  const sp = S.species[id];
+  if (!sp) return speciesForm('');
+  const n = live().filter(x => x.species_id === id).length;
+  const editBtn = `<button class="primary" data-action="edit-species-form" data-id="${id}">Edit</button>`;
+  const html = `
+    <div class="btns">${editBtn}<button data-action="tab" data-tab="more">Back</button></div>
+    <div class="site-head"><span class="sw big" style="background:${sp.colour}"></span><div><b>${h(sp.common_name)}</b> ${weedTags(sp)}<br><i class="muted">${h(sp.scientific_name || '')}</i></div></div>
+    ${sp.native ? '<div class="note warn">Indigenous plant: pasture only. Do not treat on roadsides or in bush.</div>' : ''}
+    <dl class="facts">
+      <dt>Season starts</dt><dd>${MONTHS[(sp.season_start_month || 1) - 1]}</dd>
+      <dt>Control months</dt><dd>${monthsText(sp.control_months)}</dd>
+      <dt>Scouting months</dt><dd>${monthsText(sp.scouting_months || [])}</dd>
+      <dt>WoNS</dt><dd>${sp.wons ? 'Yes, a Weed of National Significance' : 'No'}</dd>
+      <dt>Your sites</dt><dd>${n}</dd>
+    </dl>
+    ${weedInfoHTML(sp, true)}
+    <div class="btns">${editBtn}<button data-action="tab" data-tab="more">Back</button></div>`;
+  openSheet('Weed', html, 'tall');
+}
+
 function speciesForm(id) {
   const s = id ? S.species[id] : { colour: '#ff5722', season_start_month: 1, control_months: [], scouting_months: [], links: {} };
   const monthBoxes = (name, sel) => `<div class="months">${MONTHS.map((m, i) => `<label><input type="checkbox" name="${name}" value="${i + 1}" ${sel.includes(i + 1) ? 'checked' : ''}>${m}</label>`).join('')}</div>`;
   const html = `<form id="sp-form">
+    ${id ? `<div class="btns"><button class="primary" type="submit">Save</button><button type="button" data-action="edit-species" data-id="${id}">Cancel</button></div>` : ''}
     <label>Common name <input name="common_name" required value="${h(s.common_name || '')}"></label>
     <label>Scientific name <input name="scientific_name" value="${h(s.scientific_name || '')}"></label>
     <div class="grid2"><label>Colour <input type="color" name="colour" value="${h(s.colour)}"></label>
     <label>Season starts <select name="season_start_month">${MONTHS.map((m, i) => `<option value="${i + 1}" ${s.season_start_month === i + 1 ? 'selected' : ''}>${m}</option>`).join('')}</select></label></div>
     <label class="chk"><input type="checkbox" name="native" ${s.native ? 'checked' : ''}> Native / indigenous plant</label>
+    <label class="chk"><input type="checkbox" name="wons" ${s.wons ? 'checked' : ''}> Weed of National Significance (WoNS)</label>
     <p><b>Control months</b></p>${monthBoxes('control_months', s.control_months)}
     <p><b>Scouting months</b></p>${monthBoxes('scouting_months', s.scouting_months || [])}
     <label>Preferred methods <textarea name="preferred_methods" rows="2">${h(s.preferred_methods || '')}</textarea></label>
@@ -791,11 +844,14 @@ function speciesForm(id) {
     <label>Seed bank (how long seed survives in soil) <textarea name="seed_bank" rows="2">${h(s.seed_info?.seed_bank || '')}</textarea></label>
     <label>Spreads by <textarea name="seed_spread" rows="2">${h(s.seed_info?.spread || '')}</textarea></label>
     <label>Seed info source link <input name="seed_source" type="url" value="${h(s.seed_info?.source || '')}"></label>
-    <label>Info link <input name="link" type="url" value="${h(s.links?.council || '')}"></label>
+    <label>Weeds Australia link <input name="link_wa" type="url" value="${h(s.links?.weeds_australia || '')}" placeholder="Blank = search by name"></label>
+    <label>Atlas of Living Australia link <input name="link_ala" type="url" value="${h(s.links?.ala || '')}" placeholder="Blank = search by name"></label>
+    <label>Agriculture Victoria link <input name="link_agvic" type="url" value="${h(s.links?.agvic || '')}"></label>
+    <label>Other info link <input name="link" type="url" value="${h(s.links?.council || '')}"></label>
     <p><b>Your herbicides for this weed</b> <span class="muted small">(your own notes; follow the label)</span></p>
     <div id="herb-rows">${(s.herbicides || []).map(herbRow).join('')}</div>
     <div class="btns"><button type="button" id="herb-add">+ Add herbicide</button></div>
-    <div class="btns"><button class="primary" type="submit">Save</button><button type="button" data-action="tab" data-tab="more">Cancel</button>
+    <div class="btns"><button class="primary" type="submit">Save</button><button type="button" data-action="${id ? 'edit-species' : 'tab'}" data-tab="more" data-id="${id || ''}">Cancel</button>
     ${id && !S.sites.some(x => x.species_id === id) ? `<button type="button" class="danger" data-action="delete-species" data-id="${id}">Delete</button>` : ''}</div>
   </form>`;
   openSheet(id ? 'Edit weed' : 'Add weed', html, 'tall');
@@ -810,11 +866,12 @@ function speciesForm(id) {
     rec.colour = f.get('colour');
     rec.season_start_month = Number(f.get('season_start_month'));
     rec.native = f.get('native') === 'on';
+    rec.wons = f.get('wons') === 'on';
     rec.control_months = f.getAll('control_months').map(Number);
     rec.scouting_months = f.getAll('scouting_months').map(Number);
     rec.preferred_methods = f.get('preferred_methods').trim();
     rec.cautions = f.get('cautions').trim();
-    rec.links = { ...(rec.links || {}), council: f.get('link').trim() };
+    rec.links = { ...(rec.links || {}), weeds_australia: f.get('link_wa').trim(), ala: f.get('link_ala').trim(), agvic: f.get('link_agvic').trim(), council: f.get('link').trim() };
     rec.herbicides = [...document.querySelectorAll('#herb-rows .herb-row')].map(r => ({
       product: r.querySelector('[name=h_product]').value.trim(), active: r.querySelector('[name=h_active]').value.trim(),
       notes: r.querySelector('[name=h_notes]').value.trim(), label_url: r.querySelector('[name=h_label]').value.trim(),
@@ -824,7 +881,7 @@ function speciesForm(id) {
     S.species[rec.id] = rec;
     renderSites();
     toast('Weed saved');
-    renderMore();
+    speciesView(rec.id);
   });
 }
 
@@ -963,7 +1020,8 @@ async function onAction(e) {
       if (S.routeFilter === id) S.routeFilter = '';
       renderMore(); break;
     }
-    case 'edit-species': speciesForm(id); break;
+    case 'edit-species': id ? speciesView(id) : speciesForm(''); break;
+    case 'edit-species-form': speciesForm(id); break;
     case 'delete-species': {
       if (!confirm('Delete this weed from the list?')) return;
       await db.del('species', id); delete S.species[id]; renderMore(); break;

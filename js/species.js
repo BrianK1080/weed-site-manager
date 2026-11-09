@@ -7,12 +7,12 @@ const wa = q => `https://weeds.org.au/?s=${encodeURIComponent(q)}`;
 const ala = q => `https://bie.ala.org.au/search?q=${encodeURIComponent(q)}`;
 
 // Bump when seed data gains new fields; app.js adds missing fields to stored species without overwriting edits.
-export const SEED_VERSION = 3;
+export const SEED_VERSION = 4;
 
 export const SEED_SPECIES = [
   {
     id: 'sp_blackberry', common_name: 'Blackberry', scientific_name: 'Rubus fruticosus agg.',
-    native: false, colour: '#9c27b0', season_start_month: 11,
+    native: false, wons: true, colour: '#9c27b0', season_start_month: 11,
     control_months: [12, 1, 2, 3, 4], scouting_months: [11],
     preferred_methods: 'Spot spray while actively growing (flowering to fruiting). Leave treated canes 6 months before removal.',
     cautions: 'Sign sprayed fruiting bushes for pickers and birds.',
@@ -30,7 +30,7 @@ export const SEED_SPECIES = [
   },
   {
     id: 'sp_gorse', common_name: 'Gorse', scientific_name: 'Ulex europaeus',
-    native: false, colour: '#cddc39', season_start_month: 9,
+    native: false, wons: true, colour: '#cddc39', season_start_month: 9,
     control_months: [9, 10, 11, 3, 4, 5], scouting_months: [8, 9],
     preferred_methods: 'Spot spray during active growth in spring and autumn; follow up for years (seed lasts about 25 years).',
     cautions: 'Sources differ on spraying before vs during flowering: follow the product label.',
