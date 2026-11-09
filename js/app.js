@@ -320,11 +320,27 @@ function boundaryForm(geometry) {
 function openSheet(title, html, cls = '') {
   $('#sheet-title').textContent = title;
   $('#sheet-body').innerHTML = html;
+  markRequired($('#sheet-body'));
   const sh = $('#sheet');
   sh.className = cls;
   sh.hidden = false;
   document.body.classList.add('sheet-open');
   $('#sheet-body').scrollTop = 0;
+}
+// Put a red * on every required field's label, plus one "* required" note per form.
+function markRequired(root) {
+  root.querySelectorAll('form').forEach(form => {
+    const req = form.querySelectorAll('[required]');
+    req.forEach(el => {
+      const label = el.closest('label');
+      if (label && !label.querySelector('.req')) {
+        const t = [...label.childNodes].find(n => n.nodeType === 3 && n.textContent.trim());
+        const star = document.createElement('span'); star.className = 'req'; star.textContent = ' *'; star.title = 'Required';
+        if (t) t.after(star); else label.prepend(star);
+      }
+    });
+    if (req.length && !form.querySelector('.req-note')) form.insertAdjacentHTML('afterbegin', '<p class="req-note"><span class="req">*</span> required. Everything else is optional.</p>');
+  });
 }
 function hideSheet() { $('#sheet').hidden = true; document.body.classList.remove('sheet-open'); }
 function closeSheet() { hideSheet(); if (S.tab !== 'map') showTab('map', false); }
@@ -546,7 +562,7 @@ function siteForm(id, geometry) {
     ${id ? `<div class="btns spaced"><button type="button" data-action="archive-site" data-id="${id}">${site.archived ? 'Restore from archive' : 'Archive this site'}</button><button type="button" class="danger" data-action="delete-site" data-id="${id}">Delete this site</button></div>
     <p class="muted small">Archive keeps the site and its history but hides it from the map, Today and routes. Delete moves it to Sites > Deleted, where you can restore it or delete it permanently.</p>` : ''}
   </form>`;
-  openSheet(id ? 'Edit site' : 'New site', html);
+  openSheet(id ? 'Edit site' : 'New site', html, 'tall');
   $('#site-form').addEventListener('submit', async e => {
     e.preventDefault();
     const f = new FormData(e.target);
@@ -640,7 +656,7 @@ function visitForm(siteId, visitId) {
     <div class="btns"><button class="primary" type="submit">Save visit</button><button type="button" data-action="open-site" data-id="${siteId}">Cancel</button>
     ${visitId ? `<button type="button" class="danger" data-action="delete-visit" data-id="${visitId}">Delete</button>` : ''}</div>
   </form>`;
-  openSheet(visitId ? 'Edit visit' : 'Log visit', html);
+  openSheet(visitId ? 'Edit visit' : 'Log visit', html, 'tall');
   const form = $('#visit-form');
   form.method.addEventListener('change', () => { $('#chem').hidden = !CHEM_METHODS.includes(form.method.value); });
   form.plants_found.addEventListener('change', () => {
@@ -779,7 +795,7 @@ function speciesForm(id) {
     <div class="btns"><button class="primary" type="submit">Save</button><button type="button" data-action="tab" data-tab="more">Cancel</button>
     ${id && !S.sites.some(x => x.species_id === id) ? `<button type="button" class="danger" data-action="delete-species" data-id="${id}">Delete</button>` : ''}</div>
   </form>`;
-  openSheet(id ? 'Edit weed' : 'Add weed', html);
+  openSheet(id ? 'Edit weed' : 'Add weed', html, 'tall');
   $('#herb-add').addEventListener('click', () => $('#herb-rows').insertAdjacentHTML('beforeend', herbRow({})));
   $('#herb-rows').addEventListener('click', e => { if (e.target.classList.contains('herb-del')) e.target.closest('.herb-row').remove(); });
   $('#sp-form').addEventListener('submit', async e => {
@@ -995,6 +1011,20 @@ function bindUI() {
     }
   });
   $('#sheet-close').addEventListener('click', closeSheet);
+  // iPhone Safari can jump a scrolled panel back to the top when a dropdown is first opened/changed.
+  // Remember where the panel was when the dropdown was touched and put it back.
+  const body = $('#sheet-body');
+  let keep = null;
+  const remember = e => { if (e.target.tagName === 'SELECT') keep = body.scrollTop; };
+  const restore = e => {
+    if (e.target.tagName !== 'SELECT' || keep == null) return;
+    const k = keep;
+    [0, 50, 200, 500].forEach(t => setTimeout(() => { if (Math.abs(body.scrollTop - k) > 40) body.scrollTop = k; }, t));
+  };
+  body.addEventListener('touchstart', remember, { passive: true });
+  body.addEventListener('mousedown', remember);
+  body.addEventListener('focusin', restore);
+  body.addEventListener('change', restore);
   $('#btn-add').addEventListener('click', addSiteMenu);
   $('#btn-layers').addEventListener('click', () => {
     const i = BASEMAP_ORDER.indexOf(S.settings.basemap);

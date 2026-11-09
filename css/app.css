@@ -171,3 +171,5 @@ th, td { text-align: left; padding: 6px; border-bottom: 1px solid var(--line); w
 .map-btn.on { background: var(--green); color: #fff; }
 .bd-label { color: #fff; font-size: 12px; font-weight: 700; text-shadow: 0 0 3px #000, 0 0 3px #000; white-space: nowrap; }
 .leaflet-control-attribution { max-width: 58vw; font-size: 10px !important; line-height: 1.3; }
+.req { color: var(--danger); font-weight: 700; }
+.req-note { font-size: 13px; color: var(--muted); margin: 0 0 6px; }
