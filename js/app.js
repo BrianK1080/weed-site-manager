@@ -6,7 +6,7 @@ import { download, sitesCSV, chemicalRows, CHEM_COLS, toCSV, toGeoJSON, toKML, b
 
 /* ---------- basemaps (pluggable: add a provider here) ---------- */
 // Keep in step with VERSION in sw.js; shown under More > About so you can tell which version is running.
-const APP_VERSION = 11;
+const APP_VERSION = 12;
 
 const BASEMAPS = {
   map: { label: 'Street', layers: [{ url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', opts: { maxZoom: 21, maxNativeZoom: 19, attribution: '&copy; OpenStreetMap contributors' } }] },
@@ -837,7 +837,7 @@ function renderMore() {
     <form id="route-form" class="inline"><input name="name" placeholder="New route name" required><button type="submit">Add route</button></form>
     <h3>Weeds</h3>
     ${spList().map(s => `<div class="row" data-action="edit-species" data-id="${s.id}"><span class="sw" style="background:${s.colour}"></span><span class="row-main"><b>${h(s.common_name)}</b> ${weedTags(s)}<small>Control: ${monthsText(s.control_months)} · season starts ${MONTHS[s.season_start_month - 1]}</small></span></div>`).join('')}
-    <div class="btns"><button data-action="edit-species" data-id="">+ Add weed</button></div>
+    <div class="btns"><button class="primary" data-action="weed-library">Add from weed library</button><button data-action="edit-species" data-id="">+ Add weed by hand</button></div>
     <h3>Settings</h3>
     <form id="settings-form" class="inline"><input name="operator" placeholder="Your name (operator)" value="${h(S.settings.operator)}"><button type="submit">Save</button></form>
     <p class="muted small" id="persist-status"></p>
@@ -872,6 +872,108 @@ const herbRow = x => `<div class="herb-row">
   <input name="h_label" type="url" placeholder="Label link (optional)" value="${h(x.label_url || '')}">
   <button type="button" class="link danger herb-del">Remove</button></div>`;
 
+
+/* ---------- weed library (Stage 2): search the Atlas of Living Australia ---------- */
+const ALA_SEARCH = 'https://bie-ws.ala.org.au/ws/search.json';
+const alaSpeciesURL = guid => `https://bie.ala.org.au/species/${encodeURI(guid)}`; // the Atlas expects the ID as-is (often itself a URL)
+const LIB = { results: [], timer: null, seq: 0 };
+
+function weedLibrary() {
+  openSheet('Weed library', `
+    <p class="small muted">Search the Atlas of Living Australia by common or scientific name. Needs internet.</p>
+    <label>Weed name <input id="lib-q" type="search" autocomplete="off" value="${h(LIB.q || '')}" placeholder="e.g. Paterson's curse, Ulex"></label>
+    <div id="lib-results"></div>
+    <div class="btns"><button data-action="tab" data-tab="more">Back</button></div>`, 'tall');
+  const q = $('#lib-q');
+  q.addEventListener('input', () => { clearTimeout(LIB.timer); LIB.timer = setTimeout(() => librarySearch(q.value), 450); });
+  if (LIB.q) librarySearch(LIB.q); else q.focus();
+}
+
+// Native or introduced, if the Atlas says so; otherwise null (unknown).
+function alaNative(r) {
+  const v = JSON.stringify([r.nativeIntroduced, r.establishmentMeans, r.occurrenceStatus].filter(Boolean)).toLowerCase();
+  if (/introduced|naturali[sz]ed|alien/.test(v)) return false;
+  if (/native|indigenous|endemic/.test(v)) return true;
+  return null;
+}
+
+async function librarySearch(text) {
+  const term = text.trim();
+  LIB.q = term;
+  const out = $('#lib-results');
+  if (!out) return;
+  if (term.length < 3) { out.innerHTML = term ? '<p class="muted small">Type at least 3 letters.</p>' : ''; return; }
+  if (!navigator.onLine) { out.innerHTML = '<p class="warn-text">You\'re offline. The weed library needs internet; you can still add a weed by hand.</p>'; return; }
+  const seq = ++LIB.seq;
+  out.innerHTML = '<p class="muted small">Searching…</p>';
+  try {
+    const url = `${ALA_SEARCH}?q=${encodeURIComponent(term)}&fq=idxtype:TAXON&pageSize=30`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`The Atlas replied with error ${res.status}`);
+    const data = await res.json();
+    if (seq !== LIB.seq) return; // a newer search has started
+    const rows = (data.searchResults?.results || [])
+      .filter(r => r.guid && (r.scientificName || r.name))
+      .filter(r => !r.kingdom || /plant/i.test(r.kingdom))
+      .filter(r => !r.rank || /species|subspecies|variety|form|genus/i.test(r.rank))
+      .filter(r => !r.taxonomicStatus || /accepted/i.test(r.taxonomicStatus));
+    LIB.results = rows;
+    if (!rows.length) { out.innerHTML = '<p class="muted small">No plants found. Try the scientific name, or add the weed by hand.</p>'; return; }
+    const have = new Set(Object.values(S.species).map(x => (x.scientific_name || '').toLowerCase()).filter(Boolean));
+    out.innerHTML = rows.map((r, i) => {
+      const sci = r.scientificName || r.name;
+      const img = r.thumbnailUrl || r.smallImageUrl || '';
+      const added = have.has(sci.toLowerCase());
+      return `<div class="row lib-row" data-action="lib-pick" data-id="${i}">
+        ${img ? `<img class="lib-thumb" src="${h(img)}" alt="" loading="lazy">` : '<span class="lib-thumb none"></span>'}
+        <span class="row-main"><b>${h(r.commonNameSingle || r.commonName?.split(',')[0] || sci)}</b>${added ? ' <span class="tag">Already added</span>' : ''}
+        <small><i>${h(sci)}</i>${r.family ? ` · ${h(r.family)}` : ''}${r.rank ? ` · ${h(r.rank)}` : ''}</small></span></div>`;
+    }).join('') + '<p class="small muted">Results from the Atlas of Living Australia.</p>';
+  } catch (err) {
+    if (seq !== LIB.seq) return;
+    out.innerHTML = `<p class="warn-text">Couldn't reach the Atlas of Living Australia (${h(err.message || 'network error')}). Try again later, or add the weed by hand.</p>`;
+  }
+}
+
+function libraryPick(i) {
+  const r = LIB.results[i];
+  if (!r) return;
+  const sci = r.scientificName || r.name;
+  const common = r.commonNameSingle || r.commonName?.split(',')[0]?.trim() || sci;
+  const existing = Object.values(S.species).find(x => (x.scientific_name || '').toLowerCase() === sci.toLowerCase());
+  const nat = alaNative(r);
+  const used = new Set(Object.values(S.species).map(x => x.colour));
+  const colour = PALETTE.find(c => !used.has(c)) || PALETTE[0];
+  const img = r.imageUrl || r.largeImageUrl || r.smallImageUrl || r.thumbnailUrl || '';
+  openSheet('Add weed', `
+    ${img ? `<img class="lib-photo" src="${h(img)}" alt="${h(common)}">` : ''}
+    <p><b>${h(common)}</b><br><i>${h(sci)}</i>${r.family ? `<br><small class="muted">Family ${h(r.family)}</small>` : ''}</p>
+    ${existing ? `<div class="note warn">You already have this weed as "${h(existing.common_name)}". <button class="link" data-action="edit-species" data-id="${existing.id}">Open it</button></div>` : ''}
+    <form id="lib-form">
+      <label>Common name <input name="common_name" required value="${h(common)}"></label>
+      <label>Colour on the map <input type="color" name="colour" value="${colour}"></label>
+      <label class="chk"><input type="checkbox" name="native" ${nat === true ? 'checked' : ''}> Native / indigenous plant</label>
+      <p class="small muted">${nat === null ? 'The Atlas didn\'t say whether this plant is native. Check its Atlas page before treating.' : `The Atlas lists it as ${nat ? 'native' : 'introduced'}.`} <a href="${alaSpeciesURL(r.guid)}" target="_blank" rel="noopener">Atlas page</a></p>
+      <p class="small muted">After adding, set its season and control months, declared status and WoNS with Edit.</p>
+      <div class="btns"><button class="primary" type="submit">Add weed</button><button type="button" data-action="weed-library">Back to results</button></div>
+    </form>`, 'tall');
+  $('#lib-form').addEventListener('submit', async e => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    const today = localDate(new Date().toISOString());
+    const rec = { id: uid('sp'), common_name: f.get('common_name').trim(), scientific_name: sci, native: f.get('native') === 'on',
+      colour: f.get('colour'), season_start_month: 1, control_months: [], scouting_months: [], preferred_methods: '', cautions: '',
+      links: { weeds_australia: searchWA(common), ala: alaSpeciesURL(r.guid), agvic: '', council: '' },
+      seed_info: {}, herbicides: [], wons: false, calp_status: '', calp_note: '',
+      family: r.family || '', ala_guid: r.guid, image_url: img,
+      source: { name: 'Atlas of Living Australia', added: today, checked: today } };
+    await db.put('species', rec);
+    S.species[rec.id] = rec;
+    toast(`${rec.common_name} added. Now set its months with Edit.`, 4000);
+    speciesView(rec.id);
+  });
+}
+
 function speciesView(id) {
   const sp = S.species[id];
   if (!sp) return speciesForm('');
@@ -879,7 +981,8 @@ function speciesView(id) {
   const editBtn = `<button class="primary" data-action="edit-species-form" data-id="${id}">Edit</button>`;
   const html = `
     <div class="btns">${editBtn}<button data-action="tab" data-tab="more">Back</button></div>
-    <div class="site-head"><span class="sw big" style="background:${sp.colour}"></span><div><b>${h(sp.common_name)}</b> ${weedTags(sp)}<br><i class="muted">${h(sp.scientific_name || '')}</i></div></div>
+    <div class="site-head"><span class="sw big" style="background:${sp.colour}"></span><div><b>${h(sp.common_name)}</b> ${weedTags(sp)}<br><i class="muted">${h(sp.scientific_name || '')}</i>${sp.family ? `<br><small class="muted">Family ${h(sp.family)}</small>` : ''}</div></div>
+    ${sp.image_url ? `<img class="lib-photo" src="${h(sp.image_url)}" alt="${h(sp.common_name)}" loading="lazy"><p class="small muted">Photo: Atlas of Living Australia${sp.ala_guid ? ` (<a href="${alaSpeciesURL(sp.ala_guid)}" target="_blank" rel="noopener">credits</a>)` : ''}</p>` : ''}
     ${sp.native ? '<div class="note warn">Indigenous plant: pasture only. Do not treat on roadsides or in bush.</div>' : ''}
     <dl class="facts">
       <dt>Season starts</dt><dd>${MONTHS[(sp.season_start_month || 1) - 1]}</dd>
@@ -888,6 +991,7 @@ function speciesView(id) {
       <dt>WoNS</dt><dd>${sp.wons ? 'Yes, a Weed of National Significance' : 'No'}</dd>
       <dt>Declared (Vic)</dt><dd>${CALP[sp.calp_status || '']}<br><small>${CALP_MEANING[sp.calp_status || '']}</small>${sp.calp_note ? `<br><small class="muted">${h(sp.calp_note)}</small>` : ''}<br><a class="small" href="${CALP_INFO_URL}" target="_blank" rel="noopener">What the categories mean</a> · <a class="small" href="${CALP_LIST_URL}" target="_blank" rel="noopener">Lists by region</a></dd>
       <dt>Your sites</dt><dd>${n}</dd>
+      ${sp.source ? `<dt>Source</dt><dd>${h(sp.source.name)}<br><small class="muted">Added ${h(sp.source.added || '')}${sp.source.checked ? ` · last checked ${h(sp.source.checked)}` : ''}</small></dd>` : ''}
     </dl>
     ${weedInfoHTML(sp, true)}
     <div class="btns">${editBtn}<button data-action="tab" data-tab="more">Back</button></div>`;
@@ -1026,6 +1130,8 @@ async function onAction(e) {
       await setNavPoint(id, S.pos.ll); break;
     }
     case 'nav-clear': await setNavPoint(id, null); break;
+    case 'weed-library': weedLibrary(); break;
+    case 'lib-pick': libraryPick(Number(id)); break;
     case 'set-basemap': setBasemap(id); hideSheet(); break;
     case 'zoom-site': { const site = S.sites.find(s => s.id === id); zoomTo(site); hideSheet(); showTab('map', false); break; }
     case 'log-visit': visitForm(id); break;
