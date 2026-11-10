@@ -1,12 +1,13 @@
 // Weed Site Manager: Stage 1 app.
 import { db, uid, requestPersistence } from './db.js';
 import { SEED_SPECIES, SEED_VERSION } from './species.js';
+import { fillFromPack, packFor, isWons, declaredVic, PACK_CHECKED } from './weedpack.js';
 import { MONTHS, siteStatus, seasonLabel, monthsText, haversine, siteLatLng, nearestOrder, fmtDist, geometrySize } from './season.js';
 import { download, sitesCSV, chemicalRows, CHEM_COLS, toCSV, toGeoJSON, toKML, backupJSON, parseBackup, stamp, localDate, localTime } from './export.js';
 
 /* ---------- basemaps (pluggable: add a provider here) ---------- */
 // Keep in step with VERSION in sw.js; shown under More > About so you can tell which version is running.
-const APP_VERSION = 12;
+const APP_VERSION = 13;
 
 const BASEMAPS = {
   map: { label: 'Street', layers: [{ url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', opts: { maxZoom: 21, maxNativeZoom: 19, attribution: '&copy; OpenStreetMap contributors' } }] },
@@ -177,7 +178,8 @@ function renderLegend() {
   const present = new Set(live().filter(s => { const ll = siteLatLng(s); return ll && b.contains(ll); }).map(s => s.species_id));
   const items = spList().filter(s => present.has(s.id) || (S.hidden.has(s.id) && live().some(x => x.species_id === s.id)));
   const el = $('#legend');
-  if (!items.length) { el.hidden = true; return; }
+  const lb = document.getElementById('btn-legend'); if (lb) lb.classList.toggle('on', !S.settings.legendHidden);
+  if (!items.length || S.settings.legendHidden) { el.hidden = true; return; }
   el.hidden = false;
   el.innerHTML = `<div class="legend-items">${items.map(s => `<div class="legend-row ${S.hidden.has(s.id) ? 'off' : ''}"><button class="legend-item" data-action="legend-open" data-id="${s.id}"><span class="sw" style="background:${s.colour}"></span>${h(s.common_name)}${S.hidden.has(s.id) ? ' <small>(hidden)</small>' : ''}</button><button class="legend-eye" data-action="toggle-species" data-id="${s.id}" title="${S.hidden.has(s.id) ? 'Show' : 'Hide'} on map" aria-label="${S.hidden.has(s.id) ? 'Show' : 'Hide'} ${h(s.common_name)} on map">${S.hidden.has(s.id) ? '○' : '◉'}</button></div>`).join('')}</div>
     <div class="legend-key"><span>${pointSVG('#666', 'untreated')} not treated</span><span>${pointSVG('#666', 'due')} due</span><span>${pointSVG('#666', 'treated')} treated</span><span>${pointSVG('#666', 'monitoring')} monitoring</span></div>`;
@@ -201,8 +203,13 @@ function initMap() {
   boundaryLayer = L.layerGroup().addTo(map);
   siteLayer = L.layerGroup().addTo(map);
   const Ctl = L.Control.extend({ options: { position: 'bottomleft' }, onAdd() {
-    const b = L.DomUtil.create('button', 'map-btn'); b.id = 'btn-parcels'; b.type = 'button'; b.textContent = 'Boundaries'; b.title = 'Show property boundaries';
-    L.DomEvent.disableClickPropagation(b); L.DomEvent.on(b, 'click', () => setParcels(!S.settings.parcels)); return b; } });
+    const wrap = L.DomUtil.create('div', 'map-btns');
+    const lg = L.DomUtil.create('button', 'map-btn', wrap); lg.id = 'btn-legend'; lg.type = 'button'; lg.textContent = 'Legend'; lg.title = 'Show or hide the legend';
+    const b = L.DomUtil.create('button', 'map-btn', wrap); b.id = 'btn-parcels'; b.type = 'button'; b.textContent = 'Boundaries'; b.title = 'Show property boundaries';
+    L.DomEvent.disableClickPropagation(wrap);
+    L.DomEvent.on(b, 'click', () => setParcels(!S.settings.parcels));
+    L.DomEvent.on(lg, 'click', () => { S.settings.legendHidden = !S.settings.legendHidden; saveSettings(); renderLegend(); });
+    return wrap; } });
   new Ctl().addTo(map);
   if (S.settings.parcels) setParcels(true);
   renderBoundaries();
@@ -941,7 +948,11 @@ function libraryPick(i) {
   const sci = r.scientificName || r.name;
   const common = r.commonNameSingle || r.commonName?.split(',')[0]?.trim() || sci;
   const existing = Object.values(S.species).find(x => (x.scientific_name || '').toLowerCase() === sci.toLowerCase());
-  const nat = alaNative(r);
+  const pack = packFor(sci);
+  const atlasNat = alaNative(r);
+  const nat = atlasNat ?? pack?.native ?? null;
+  const decl = declaredVic(sci);
+  const wons = isWons(sci);
   const used = new Set(Object.values(S.species).map(x => x.colour));
   const colour = PALETTE.find(c => !used.has(c)) || PALETTE[0];
   const img = r.imageUrl || r.largeImageUrl || r.smallImageUrl || r.thumbnailUrl || '';
@@ -953,8 +964,12 @@ function libraryPick(i) {
       <label>Common name <input name="common_name" required value="${h(common)}"></label>
       <label>Colour on the map <input type="color" name="colour" value="${colour}"></label>
       <label class="chk"><input type="checkbox" name="native" ${nat === true ? 'checked' : ''}> Native / indigenous plant</label>
-      <p class="small muted">${nat === null ? 'The Atlas didn\'t say whether this plant is native. Check its Atlas page before treating.' : `The Atlas lists it as ${nat ? 'native' : 'introduced'}.`} <a href="${alaSpeciesURL(r.guid)}" target="_blank" rel="noopener">Atlas page</a></p>
-      <p class="small muted">After adding, set its season and control months, declared status and WoNS with Edit.</p>
+      <p class="small muted">${nat === null ? 'Neither the Atlas nor the weed pack says whether this plant is native. Check its Atlas page before treating.' : `${atlasNat != null ? 'The Atlas' : 'The weed pack'} lists it as ${nat ? 'native' : 'introduced'}.`} <a href="${alaSpeciesURL(r.guid)}" target="_blank" rel="noopener">Atlas page</a></p>
+      <div class="seedbox"><b>What will be filled in</b>
+        <p>${pack ? '✓ Months, methods and seed info from the weed pack' : '✗ Not in the weed pack yet: months, methods and seed info stay blank (ask Claude to research it)'}</p>
+        <p>${wons ? '✓ WoNS: yes' : '✓ WoNS: not on the national list'}</p>
+        <p>${decl ? `✓ Declared status (Vic): ${CALP[decl.status]}` : '✗ Declared status (Vic): not in the app\'s table; check Agriculture Victoria\'s list'}</p>
+        <p>✗ Herbicides: no registered-product list in the app yet. See the <a href="${APVMA_URL}" target="_blank" rel="noopener">APVMA register (PubCRIS)</a> and the weed's profile pages.</p></div>
       <div class="btns"><button class="primary" type="submit">Add weed</button><button type="button" data-action="weed-library">Back to results</button></div>
     </form>`, 'tall');
   $('#lib-form').addEventListener('submit', async e => {
@@ -967,20 +982,26 @@ function libraryPick(i) {
       seed_info: {}, herbicides: [], wons: false, calp_status: '', calp_note: '',
       family: r.family || '', ala_guid: r.guid, image_url: img,
       source: { name: 'Atlas of Living Australia', added: today, checked: today } };
+    rec.wons = undefined; rec.calp_status = undefined; rec.calp_note = undefined; rec.season_start_month = undefined;
+    const res = fillFromPack(rec);
+    if (res.inPack) rec.pack = { checked: PACK_CHECKED };
+    if (!rec.season_start_month) rec.season_start_month = 1;
     await db.put('species', rec);
     S.species[rec.id] = rec;
-    toast(`${rec.common_name} added. Now set its months with Edit.`, 4000);
-    speciesView(rec.id);
+    speciesView(rec.id, res);
   });
 }
 
-function speciesView(id) {
+function speciesView(id, fillResult) {
   const sp = S.species[id];
   if (!sp) return speciesForm('');
   const n = live().filter(x => x.species_id === id).length;
   const editBtn = `<button class="primary" data-action="edit-species-form" data-id="${id}">Edit</button>`;
+  const pk = packFor(sp.scientific_name);
+  const summary = fillResult ? `<div class="note"><b>${fillResult.filled.length ? 'Filled in: ' + h(fillResult.filled.join(', ')) : 'Nothing new to fill in.'}</b>${fillResult.missing.length ? `<br>Still blank: ${h(fillResult.missing.join(', '))}.` : ''}</div>` : '';
   const html = `
-    <div class="btns">${editBtn}<button data-action="tab" data-tab="more">Back</button></div>
+    ${summary}
+    <div class="btns">${editBtn}${pk || sp.scientific_name ? `<button data-action="fill-pack" data-id="${id}">Fill gaps</button>` : ''}<button data-action="tab" data-tab="more">Back</button></div>
     <div class="site-head"><span class="sw big" style="background:${sp.colour}"></span><div><b>${h(sp.common_name)}</b> ${weedTags(sp)}<br><i class="muted">${h(sp.scientific_name || '')}</i>${sp.family ? `<br><small class="muted">Family ${h(sp.family)}</small>` : ''}</div></div>
     ${sp.image_url ? `<img class="lib-photo" src="${h(sp.image_url)}" alt="${h(sp.common_name)}" loading="lazy"><p class="small muted">Photo: Atlas of Living Australia${sp.ala_guid ? ` (<a href="${alaSpeciesURL(sp.ala_guid)}" target="_blank" rel="noopener">credits</a>)` : ''}</p>` : ''}
     ${sp.native ? '<div class="note warn">Indigenous plant: pasture only. Do not treat on roadsides or in bush.</div>' : ''}
@@ -991,6 +1012,7 @@ function speciesView(id) {
       <dt>WoNS</dt><dd>${sp.wons ? 'Yes, a Weed of National Significance' : 'No'}</dd>
       <dt>Declared (Vic)</dt><dd>${CALP[sp.calp_status || '']}<br><small>${CALP_MEANING[sp.calp_status || '']}</small>${sp.calp_note ? `<br><small class="muted">${h(sp.calp_note)}</small>` : ''}<br><a class="small" href="${CALP_INFO_URL}" target="_blank" rel="noopener">What the categories mean</a> · <a class="small" href="${CALP_LIST_URL}" target="_blank" rel="noopener">Lists by region</a></dd>
       <dt>Your sites</dt><dd>${n}</dd>
+      ${sp.pack ? `<dt>Weed pack</dt><dd>Months, methods and seed info from the weed pack<br><small class="muted">Last checked ${h(sp.pack.checked)}</small></dd>` : ''}
       ${sp.source ? `<dt>Source</dt><dd>${h(sp.source.name)}<br><small class="muted">Added ${h(sp.source.added || '')}${sp.source.checked ? ` · last checked ${h(sp.source.checked)}` : ''}</small></dd>` : ''}
     </dl>
     ${weedInfoHTML(sp, true)}
@@ -1131,6 +1153,12 @@ async function onAction(e) {
     }
     case 'nav-clear': await setNavPoint(id, null); break;
     case 'weed-library': weedLibrary(); break;
+    case 'fill-pack': {
+      const sp = S.species[id];
+      const res = fillFromPack(sp);
+      if (res.inPack) sp.pack = { checked: PACK_CHECKED };
+      await db.put('species', sp); renderSites(); speciesView(id, res); break;
+    }
     case 'lib-pick': libraryPick(Number(id)); break;
     case 'set-basemap': setBasemap(id); hideSheet(); break;
     case 'zoom-site': { const site = S.sites.find(s => s.id === id); zoomTo(site); hideSheet(); showTab('map', false); break; }

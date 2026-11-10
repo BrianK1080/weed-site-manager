@@ -1,10 +1,10 @@
 // Service worker: keeps the app working offline.
 // App files: cached on install. Map tiles: the ones you have viewed are kept (up to a limit),
 // so recently seen areas still show without reception. No site data passes through here.
-const VERSION = 'wsm-v12';
+const VERSION = 'wsm-v13';
 const SHELL = [
   './', 'index.html', 'css/app.css', 'manifest.webmanifest',
-  'js/app.js', 'js/db.js', 'js/season.js', 'js/species.js', 'js/export.js',
+  'js/app.js', 'js/db.js', 'js/season.js', 'js/species.js', 'js/weedpack.js', 'js/export.js',
   'vendor/leaflet/leaflet.js', 'vendor/leaflet/leaflet.css',
   'vendor/leaflet/images/layers.png', 'vendor/leaflet/images/layers-2x.png',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/icon-180.png',

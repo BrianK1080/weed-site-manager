@@ -8,6 +8,7 @@ The full spec, decisions and status live in the claude.ai Project "Weed Manageme
 - `js/app.js`: all UI. Event delegation via `data-action` attributes; sheets rendered as template strings.
 - `js/season.js`: pure season/status logic and geometry helpers. Unit-testable in Node.
 - `js/species.js`: seed species (only used when the species store is empty).
+- `js/weedpack.js`: weed pack (researched months, methods, seed info, cited), built-in WoNS list and Victorian declared table; `fillFromPack()` fills only empty fields. Add new researched weeds here, with sources.
 - `js/export.js`: CSV/GeoJSON/KML/backup. Dates in exports use device-local time.
 - `js/db.js`: IndexedDB wrapper. Stores: species, sites, visits, routes, photos, meta.
 - `sw.js`: offline cache. Bump `VERSION` whenever shell files change (and `APP_VERSION` in app.js to the same number), and add new files to `SHELL`.
