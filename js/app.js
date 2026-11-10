@@ -6,7 +6,7 @@ import { download, sitesCSV, chemicalRows, CHEM_COLS, toCSV, toGeoJSON, toKML, b
 
 /* ---------- basemaps (pluggable: add a provider here) ---------- */
 // Keep in step with VERSION in sw.js; shown under More > About so you can tell which version is running.
-const APP_VERSION = 10;
+const APP_VERSION = 11;
 
 const BASEMAPS = {
   map: { label: 'Street', layers: [{ url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', opts: { maxZoom: 21, maxNativeZoom: 19, attribution: '&copy; OpenStreetMap contributors' } }] },
@@ -21,6 +21,15 @@ const BASEMAPS = {
 const BASEMAP_ORDER = ['sat', 'hybrid', 'map', 'topo'];
 // Victorian declared weed categories (Catchment and Land Protection Act 1994). Regional categories depend on the catchment region.
 const CALP = { '': 'Not declared', state_prohibited: 'State prohibited', regionally_prohibited: 'Regionally prohibited', regionally_controlled: 'Regionally controlled', restricted: 'Restricted' };
+// One-line meanings, from Agriculture Victoria's "Invasive plant classifications" page.
+const CALP_MEANING = {
+  '': 'Not a declared noxious weed in this region. Control is good practice but not a legal duty.',
+  state_prohibited: 'Not in Victoria or present in small numbers that can be eradicated. Agriculture Victoria eradicates it on all land: report it, don\'t treat it yourself.',
+  regionally_prohibited: 'Not widespread in this region. Land owners must take all reasonable steps to eradicate it on their land.',
+  regionally_controlled: 'Widespread in this region. Land owners must take all reasonable steps to prevent its growth and spread on their land.',
+  restricted: 'Trade is banned (plants, seed or contaminated material) because of the risk of spread.',
+};
+const CALP_INFO_URL = 'https://agriculture.vic.gov.au/biosecurity/weeds/invasive-plant-classifications';
 const CALP_LIST_URL = 'https://agriculture.vic.gov.au/biosecurity/protecting-victoria/legislation-policy-and-permits/consolidated-lists-of-declared-noxious-weeds-and-pest-animals';
 const AGVIC_REPORT = { email: 'weed.spotters@agriculture.vic.gov.au', phone: '136186', phoneText: '136 186', form: 'https://agriculture.vic.gov.au/biosecurity/weeds/state-prohibited-weeds/state-prohibited-weeds-in-victoria' };
 const WEEDSCAN_URL = 'https://weedscan.org.au/';
@@ -528,7 +537,8 @@ function reportText(site, sp, ll) {
 function reportHTML(site, sp, ll) {
   if (!ll) return '';
   const text = reportText(site, sp, ll);
-  const prohibited = /prohibited/.test(sp.calp_status || '');
+  const prohibited = sp.calp_status === 'state_prohibited';
+  const regional = sp.calp_status === 'regionally_prohibited';
   const body = `${text}\n\nReported by:\nName: \nPhone: \n\n(Photos attached)`;
   const mail = `mailto:${AGVIC_REPORT.email}?subject=${encodeURIComponent(`Suspected ${CALP[sp.calp_status] || ''} weed: ${sp.common_name}`)}&body=${encodeURIComponent(body)}`;
   return `<details class="report"><summary><b>Report this weed</b></summary>
@@ -539,6 +549,7 @@ function reportHTML(site, sp, ll) {
     ${prohibited ? `<div class="note warn"><b>${CALP[sp.calp_status]} weed:</b> report it to Agriculture Victoria. Don't remove or treat it yourself unless they say so.
       <div class="btns"><a class="button" href="${mail}">Email report</a><a class="button" href="tel:${AGVIC_REPORT.phone}">Call ${AGVIC_REPORT.phoneText}</a><a class="button" href="${AGVIC_REPORT.form}" target="_blank" rel="noopener">Online form</a></div>
       <p class="small">The email opens with these details filled in: add your name, phone and photos.</p></div>` : ''}
+    ${regional ? `<div class="note warn"><b>Regionally prohibited:</b> land owners must eradicate it on their land. For a roadside, tell the council. For advice, call Agriculture Victoria on <a href="tel:${AGVIC_REPORT.phone}">${AGVIC_REPORT.phoneText}</a> and ask for your regional contact.</div>` : ''}
   </details>`;
 }
 
@@ -576,7 +587,7 @@ async function openSite(id) {
       <dt>Location</dt><dd>${ll ? `${ll[0].toFixed(6)}, ${ll[1].toFixed(6)}` : '-'}</dd>
       <dt>Navigate to</dt><dd>${site.nav_point ? `Your point (${site.nav_point.lat.toFixed(5)}, ${site.nav_point.lng.toFixed(5)})` : site.geometry?.type === 'Point' ? 'The site point' : site.geometry?.type === 'LineString' ? 'Middle of the line' : 'Centre of the area'}
         <br><button class="link" data-action="nav-map" data-id="${id}">Set on map</button> · <button class="link" data-action="nav-gps" data-id="${id}">Use my location</button>${site.nav_point ? ` · <button class="link" data-action="nav-clear" data-id="${id}">Clear</button>` : ''}</dd>
-      ${sp.calp_status ? `<dt>Declared (Vic)</dt><dd>${CALP[sp.calp_status]}</dd>` : ''}
+      ${sp.calp_status ? `<dt>Declared (Vic)</dt><dd>${CALP[sp.calp_status]}<br><small class="muted">${CALP_MEANING[sp.calp_status]}</small></dd>` : ''}
       ${site.access_notes ? `<dt>Notes</dt><dd>${h(site.access_notes)}</dd>` : ''}
     </dl>
     ${weedInfoHTML(sp)}
@@ -875,7 +886,7 @@ function speciesView(id) {
       <dt>Control months</dt><dd>${monthsText(sp.control_months)}</dd>
       <dt>Scouting months</dt><dd>${monthsText(sp.scouting_months || [])}</dd>
       <dt>WoNS</dt><dd>${sp.wons ? 'Yes, a Weed of National Significance' : 'No'}</dd>
-      <dt>Declared (Vic)</dt><dd>${CALP[sp.calp_status || '']}${sp.calp_note ? `<br><small class="muted">${h(sp.calp_note)}</small>` : ''}<br><a class="small" href="${CALP_LIST_URL}" target="_blank" rel="noopener">Agriculture Victoria declared weed lists</a></dd>
+      <dt>Declared (Vic)</dt><dd>${CALP[sp.calp_status || '']}<br><small>${CALP_MEANING[sp.calp_status || '']}</small>${sp.calp_note ? `<br><small class="muted">${h(sp.calp_note)}</small>` : ''}<br><a class="small" href="${CALP_INFO_URL}" target="_blank" rel="noopener">What the categories mean</a> · <a class="small" href="${CALP_LIST_URL}" target="_blank" rel="noopener">Lists by region</a></dd>
       <dt>Your sites</dt><dd>${n}</dd>
     </dl>
     ${weedInfoHTML(sp, true)}
@@ -895,6 +906,7 @@ function speciesForm(id) {
     <label class="chk"><input type="checkbox" name="native" ${s.native ? 'checked' : ''}> Native / indigenous plant</label>
     <label class="chk"><input type="checkbox" name="wons" ${s.wons ? 'checked' : ''}> Weed of National Significance (WoNS)</label>
     <label>Declared status (Victoria) <select name="calp_status">${Object.entries(CALP).map(([k, t]) => `<option value="${k}" ${(s.calp_status || '') === k ? 'selected' : ''}>${t}</option>`).join('')}</select></label>
+    <p class="small muted">Categories are set per catchment region (yours: Port Phillip & Westernport). <a href="${CALP_INFO_URL}" target="_blank" rel="noopener">What they mean</a> · <a href="${CALP_LIST_URL}" target="_blank" rel="noopener">Lists by region</a></p>
     <label>Declared status note <input name="calp_note" value="${h(s.calp_note || '')}" placeholder="e.g. region, date checked"></label>
     <p><b>Control months</b></p>${monthBoxes('control_months', s.control_months)}
     <p><b>Scouting months</b></p>${monthBoxes('scouting_months', s.scouting_months || [])}
