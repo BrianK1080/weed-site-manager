@@ -6,18 +6,25 @@ import { download, sitesCSV, chemicalRows, CHEM_COLS, toCSV, toGeoJSON, toKML, b
 
 /* ---------- basemaps (pluggable: add a provider here) ---------- */
 // Keep in step with VERSION in sw.js; shown under More > About so you can tell which version is running.
-const APP_VERSION = 9;
+const APP_VERSION = 10;
 
 const BASEMAPS = {
-  map: { label: 'Map', layers: [{ url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', opts: { maxZoom: 21, maxNativeZoom: 19, attribution: '&copy; OpenStreetMap contributors' } }] },
+  map: { label: 'Street', layers: [{ url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', opts: { maxZoom: 21, maxNativeZoom: 19, attribution: '&copy; OpenStreetMap contributors' } }] },
   sat: { label: 'Satellite', layers: [{ url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', opts: { maxZoom: 21, maxNativeZoom: 18, attribution: 'Imagery &copy; Esri, Maxar, Earthstar Geographics' } }] },
+  topo: { label: 'Topo', layers: [{ url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}', opts: { maxZoom: 21, maxNativeZoom: 18, attribution: 'Map &copy; Esri and contributors' } }] },
   hybrid: { label: 'Sat + labels', layers: [
     { url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', opts: { maxZoom: 21, maxNativeZoom: 18, attribution: 'Imagery &copy; Esri, Maxar, Earthstar Geographics' } },
     { url: 'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}', opts: { maxZoom: 21, maxNativeZoom: 18 } },
     { url: 'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}', opts: { maxZoom: 21, maxNativeZoom: 18 } },
   ] },
 };
-const BASEMAP_ORDER = ['sat', 'hybrid', 'map'];
+const BASEMAP_ORDER = ['sat', 'hybrid', 'map', 'topo'];
+// Victorian declared weed categories (Catchment and Land Protection Act 1994). Regional categories depend on the catchment region.
+const CALP = { '': 'Not declared', state_prohibited: 'State prohibited', regionally_prohibited: 'Regionally prohibited', regionally_controlled: 'Regionally controlled', restricted: 'Restricted' };
+const CALP_LIST_URL = 'https://agriculture.vic.gov.au/biosecurity/protecting-victoria/legislation-policy-and-permits/consolidated-lists-of-declared-noxious-weeds-and-pest-animals';
+const AGVIC_REPORT = { email: 'weed.spotters@agriculture.vic.gov.au', phone: '136186', phoneText: '136 186', form: 'https://agriculture.vic.gov.au/biosecurity/weeds/state-prohibited-weeds/state-prohibited-weeds-in-victoria' };
+const WEEDSCAN_URL = 'https://weedscan.org.au/';
+const BASEMAP_NOTE = { sat: 'Aerial photo', hybrid: 'Aerial photo with road and place names', map: 'Street map (OpenStreetMap): roads, tracks, buildings', topo: 'Topographic map: contours, creeks, tracks' };
 const HOME = [-37.585, 145.385]; // Steels Creek, Yarra Valley
 const AMBER = '#ffab00';
 const GREY = '#9e9e9e';
@@ -76,7 +83,7 @@ async function load() {
       const cur = S.species[seed.id];
       if (!cur) continue;
       let added = false;
-      if (cur.wons === undefined && seed.wons !== undefined) { cur.wons = seed.wons; added = true; }
+      for (const k of ['wons', 'calp_status', 'calp_note']) if (cur[k] === undefined && seed[k] !== undefined) { cur[k] = seed[k]; added = true; }
       if (!seed.seed_info) { if (added) changed.push(cur); continue; }
       const si = { ...(cur.seed_info || {}) };
       for (const [k, v] of Object.entries(seed.seed_info)) if (si[k] === undefined) { si[k] = v; added = true; }
@@ -147,6 +154,7 @@ function renderSites() {
     const layers = (site.geometry.type === 'Point' || z < COLLAPSE_ZOOM)
       ? [pointMarker(siteLatLng(site), colour, st.status, z >= 17 ? site.name : '')]
       : shapeLayers(site, colour, st.status, st.percentTreated);
+    if (site.nav_point && z >= COLLAPSE_ZOOM) layers.push(L.marker([site.nav_point.lat, site.nav_point.lng], { icon: L.divIcon({ className: 'nav-pt', html: '⚑', iconSize: [22, 22], iconAnchor: [5, 20] }), title: 'Navigate-to point' }));
     for (const l of layers) {
       l.on('click', e => { if (S.draw) return; L.DomEvent.stopPropagation(e); openSite(site.id); });
       siteLayer.addLayer(l);
@@ -262,7 +270,7 @@ function updateDrawBar() {
   const bar = $('#drawbar');
   if (!d) { bar.hidden = true; drawLayer.clearLayers(); return; }
   bar.hidden = false;
-  const what = d.boundary ? `Boundary: tap each corner of the property (${d.pts.length} points), then Finish` : d.type === 'point' ? 'Tap the map where the weeds are' : `${d.type === 'line' ? 'Line' : 'Area'}: tap the map to add points anywhere (you don't need to be there), or "Add GPS point" to add where you're standing (${d.pts.length} points)`;
+  const what = d.navFor ? 'Tap the map where you want directions to take you (e.g. the gate)' : d.boundary ? `Boundary: tap each corner of the property (${d.pts.length} points), then Finish` : d.type === 'point' ? 'Tap the map where the weeds are' : `${d.type === 'line' ? 'Line' : 'Area'}: tap the map to add points anywhere (you don't need to be there), or "Add GPS point" to add where you're standing (${d.pts.length} points)`;
   $('#draw-msg').textContent = what;
   $('#draw-gps').hidden = d.type === 'point';
   $('#draw-undo').hidden = d.type === 'point';
@@ -282,6 +290,15 @@ function onMapClick(e) {
   updateDrawBar();
 }
 
+async function setNavPoint(id, ll) {
+  const site = S.sites.find(s => s.id === id);
+  if (ll) site.nav_point = { lat: Number(ll[0].toFixed(7)), lng: Number(ll[1].toFixed(7)) }; else delete site.nav_point;
+  await db.put('sites', site);
+  renderSites();
+  openSite(id);
+  toast(ll ? 'Directions will now go to this point' : 'Directions go to the site again');
+}
+
 function finishDraw() {
   const d = S.draw;
   const need = d.type === 'point' ? 1 : d.type === 'line' ? 2 : 3;
@@ -293,6 +310,8 @@ function finishDraw() {
   else geometry = { type: 'Polygon', coordinates: [[...c, c[0]]] };
   const pending = S.draw.editId;
   const isBoundary = S.draw.boundary;
+  const navFor = S.draw.navFor;
+  if (navFor) { S.draw = null; updateDrawBar(); setNavPoint(navFor, d.pts[0]); return; }
   S.draw = null;
   updateDrawBar();
   if (isBoundary) { boundaryForm(geometry); return; }
@@ -486,7 +505,41 @@ function weedInfoHTML(sp, full = false) {
     ${links ? `<p class="links">${links}</p>` : ''}`;
 }
 function weedTags(sp) {
-  return `${sp.wons ? '<span class="tag wons" title="Weed of National Significance">WoNS</span>' : ''}${sp.native ? '<span class="tag">Native</span>' : ''}`;
+  return `${sp.wons ? '<span class="tag wons" title="Weed of National Significance">WoNS</span>' : ''}${sp.calp_status ? `<span class="tag calp${/prohibited/.test(sp.calp_status) ? ' prohib' : ''}" title="Victorian declared weed">${CALP[sp.calp_status]}</span>` : ''}${sp.native ? '<span class="tag">Native</span>' : ''}`;
+}
+
+/* ---------- reporting to WeedScan / Agriculture Victoria ---------- */
+function reportText(site, sp, ll) {
+  const last = S.visits.filter(v => v.site_id === site.id).sort((a, b) => b.datetime.localeCompare(a.datetime))[0];
+  const seen = last ? (last.visit_date ? fmtDate(last.visit_date + 'T12:00') : fmtDate(last.datetime)) : fmtDate(new Date().toISOString());
+  const shape = { Point: 'point', LineString: 'middle of a line', Polygon: 'centre of an area' }[site.geometry?.type] || '';
+  return [
+    `Weed: ${sp.common_name || ''}${sp.scientific_name ? ` (${sp.scientific_name})` : ''}`,
+    ll ? `Location: ${ll[0].toFixed(6)}, ${ll[1].toFixed(6)}${shape ? ` (${shape})` : ''}` : '',
+    ll ? `Map: https://www.google.com/maps?q=${ll[0].toFixed(6)},${ll[1].toFixed(6)}` : '',
+    site.size_value != null ? `Size: ${site.size_value} ${site.size_unit}` : '',
+    site.density ? `Density: ${site.density} of 5` : '',
+    last?.plants_count != null ? `Plants counted: ${last.plants_count}` : '',
+    `Date seen: ${seen}`,
+    site.location_id ? `Place: ${site.location_id}` : '',
+    `Land: ${TENURE[site.tenure] || '-'}`,
+  ].filter(Boolean).join('\n');
+}
+function reportHTML(site, sp, ll) {
+  if (!ll) return '';
+  const text = reportText(site, sp, ll);
+  const prohibited = /prohibited/.test(sp.calp_status || '');
+  const body = `${text}\n\nReported by:\nName: \nPhone: \n\n(Photos attached)`;
+  const mail = `mailto:${AGVIC_REPORT.email}?subject=${encodeURIComponent(`Suspected ${CALP[sp.calp_status] || ''} weed: ${sp.common_name}`)}&body=${encodeURIComponent(body)}`;
+  return `<details class="report"><summary><b>Report this weed</b></summary>
+    <p class="small muted">These details are copied for you to paste:</p>
+    <pre class="report-text">${h(text)}</pre>
+    <div class="btns"><button data-action="report-weedscan" data-id="${site.id}">Copy and open WeedScan</button></div>
+    <p class="small muted">In WeedScan, add a photo, then paste into the comment. ${site.tenure === 'private' ? 'This is private land: tick "Not for public view" if you don\'t want the location shown publicly.' : ''} WeedScan alerts state and local weed officers who follow that weed.</p>
+    ${prohibited ? `<div class="note warn"><b>${CALP[sp.calp_status]} weed:</b> report it to Agriculture Victoria. Don't remove or treat it yourself unless they say so.
+      <div class="btns"><a class="button" href="${mail}">Email report</a><a class="button" href="tel:${AGVIC_REPORT.phone}">Call ${AGVIC_REPORT.phoneText}</a><a class="button" href="${AGVIC_REPORT.form}" target="_blank" rel="noopener">Online form</a></div>
+      <p class="small">The email opens with these details filled in: add your name, phone and photos.</p></div>` : ''}
+  </details>`;
 }
 
 /* ---------- Site detail ---------- */
@@ -496,6 +549,7 @@ async function openSite(id) {
   const sp = S.species[site.species_id] || {};
   const st = statusOf(site);
   const ll = siteLatLng(site);
+  const nav = site.nav_point ? [site.nav_point.lat, site.nav_point.lng] : ll;
   const visits = S.visits.filter(v => v.site_id === id).sort((a, b) => b.datetime.localeCompare(a.datetime));
   const route = S.routes.find(r => r.id === site.route_id);
   const html = `
@@ -507,7 +561,7 @@ async function openSite(id) {
     <div class="btns">
       <button class="primary" data-action="log-visit" data-id="${id}">Log visit</button>
       <button data-action="zoom-site" data-id="${id}">Show on map</button>
-      ${ll ? `<a class="button" href="https://www.google.com/maps/dir/?api=1&destination=${ll[0]},${ll[1]}" target="_blank" rel="noopener">Directions</a>` : ''}
+      ${nav ? `<a class="button" href="https://www.google.com/maps/dir/?api=1&destination=${nav[0]},${nav[1]}" target="_blank" rel="noopener">Directions</a>` : ''}
     </div>
     <dl class="facts">
       <dt>Status</dt><dd>${STATUS_TEXT[st.status]}${site.status_override && site.status_override !== 'active' ? ` (set to ${site.status_override})` : ''}${st.lastVisit ? ` · last visit ${h(visitWhen(st.lastVisit))}` : ''}</dd>
@@ -520,9 +574,13 @@ async function openSite(id) {
       <dt>Route</dt><dd>${route ? h(route.name) : '-'}</dd>
       <dt>Control months</dt><dd>${monthsText(sp.control_months)}</dd>
       <dt>Location</dt><dd>${ll ? `${ll[0].toFixed(6)}, ${ll[1].toFixed(6)}` : '-'}</dd>
+      <dt>Navigate to</dt><dd>${site.nav_point ? `Your point (${site.nav_point.lat.toFixed(5)}, ${site.nav_point.lng.toFixed(5)})` : site.geometry?.type === 'Point' ? 'The site point' : site.geometry?.type === 'LineString' ? 'Middle of the line' : 'Centre of the area'}
+        <br><button class="link" data-action="nav-map" data-id="${id}">Set on map</button> · <button class="link" data-action="nav-gps" data-id="${id}">Use my location</button>${site.nav_point ? ` · <button class="link" data-action="nav-clear" data-id="${id}">Clear</button>` : ''}</dd>
+      ${sp.calp_status ? `<dt>Declared (Vic)</dt><dd>${CALP[sp.calp_status]}</dd>` : ''}
       ${site.access_notes ? `<dt>Notes</dt><dd>${h(site.access_notes)}</dd>` : ''}
     </dl>
     ${weedInfoHTML(sp)}
+    ${reportHTML(site, sp, ll)}
     <div class="photos" id="site-photos"></div>
     <h3>Visit history (${visits.length})</h3>
     ${visits.length ? visits.map(v => `<div class="visit"><b>${visitWhen(v)}</b> · ${h(METHODS[v.method] || v.method)}${v.plants_found === false ? ' · no plants found' : ''}${v.plants_count != null ? ` · ${v.plants_count} plants` : ''}${v.status_after && v.status_after !== 'active' ? ` · → ${v.status_after === 'monitoring' ? 'Monitoring' : 'Eradicated'}` : ''}${v.percent_treated != null && v.method !== 'inspect' && v.plants_found !== false ? ` · ${v.percent_treated}%` : ''}
@@ -817,6 +875,7 @@ function speciesView(id) {
       <dt>Control months</dt><dd>${monthsText(sp.control_months)}</dd>
       <dt>Scouting months</dt><dd>${monthsText(sp.scouting_months || [])}</dd>
       <dt>WoNS</dt><dd>${sp.wons ? 'Yes, a Weed of National Significance' : 'No'}</dd>
+      <dt>Declared (Vic)</dt><dd>${CALP[sp.calp_status || '']}${sp.calp_note ? `<br><small class="muted">${h(sp.calp_note)}</small>` : ''}<br><a class="small" href="${CALP_LIST_URL}" target="_blank" rel="noopener">Agriculture Victoria declared weed lists</a></dd>
       <dt>Your sites</dt><dd>${n}</dd>
     </dl>
     ${weedInfoHTML(sp, true)}
@@ -835,6 +894,8 @@ function speciesForm(id) {
     <label>Season starts <select name="season_start_month">${MONTHS.map((m, i) => `<option value="${i + 1}" ${s.season_start_month === i + 1 ? 'selected' : ''}>${m}</option>`).join('')}</select></label></div>
     <label class="chk"><input type="checkbox" name="native" ${s.native ? 'checked' : ''}> Native / indigenous plant</label>
     <label class="chk"><input type="checkbox" name="wons" ${s.wons ? 'checked' : ''}> Weed of National Significance (WoNS)</label>
+    <label>Declared status (Victoria) <select name="calp_status">${Object.entries(CALP).map(([k, t]) => `<option value="${k}" ${(s.calp_status || '') === k ? 'selected' : ''}>${t}</option>`).join('')}</select></label>
+    <label>Declared status note <input name="calp_note" value="${h(s.calp_note || '')}" placeholder="e.g. region, date checked"></label>
     <p><b>Control months</b></p>${monthBoxes('control_months', s.control_months)}
     <p><b>Scouting months</b></p>${monthBoxes('scouting_months', s.scouting_months || [])}
     <label>Preferred methods <textarea name="preferred_methods" rows="2">${h(s.preferred_methods || '')}</textarea></label>
@@ -867,6 +928,8 @@ function speciesForm(id) {
     rec.season_start_month = Number(f.get('season_start_month'));
     rec.native = f.get('native') === 'on';
     rec.wons = f.get('wons') === 'on';
+    rec.calp_status = f.get('calp_status');
+    rec.calp_note = f.get('calp_note').trim();
     rec.control_months = f.getAll('control_months').map(Number);
     rec.scouting_months = f.getAll('scouting_months').map(Number);
     rec.preferred_methods = f.get('preferred_methods').trim();
@@ -938,6 +1001,20 @@ async function onAction(e) {
       break;
     }
     case 'open-site': openSite(id); break;
+    case 'report-weedscan': {
+      const site = S.sites.find(s => s.id === id); const sp = S.species[site.species_id] || {};
+      const text = reportText(site, sp, siteLatLng(site));
+      (navigator.clipboard?.writeText(text) || Promise.reject()).then(() => toast('Details copied. Paste them into WeedScan.', 4000), () => toast('Copy the details from the box by hand.', 4000));
+      window.open(WEEDSCAN_URL, '_blank', 'noopener');
+      break;
+    }
+    case 'nav-map': startDraw('point', 'tap'); S.draw.navFor = id; zoomTo(S.sites.find(s => s.id === id)); updateDrawBar(); break;
+    case 'nav-gps': {
+      if (!S.pos) { toast('Waiting for GPS…'); break; }
+      await setNavPoint(id, S.pos.ll); break;
+    }
+    case 'nav-clear': await setNavPoint(id, null); break;
+    case 'set-basemap': setBasemap(id); hideSheet(); break;
     case 'zoom-site': { const site = S.sites.find(s => s.id === id); zoomTo(site); hideSheet(); showTab('map', false); break; }
     case 'log-visit': visitForm(id); break;
     case 'edit-visit': visitForm(S.visits.find(v => v.id === id).site_id, id); break;
@@ -1088,8 +1165,7 @@ function bindUI() {
   body.addEventListener('change', restore);
   $('#btn-add').addEventListener('click', addSiteMenu);
   $('#btn-layers').addEventListener('click', () => {
-    const i = BASEMAP_ORDER.indexOf(S.settings.basemap);
-    setBasemap(BASEMAP_ORDER[(i + 1) % BASEMAP_ORDER.length]);
+    openSheet('Map view', BASEMAP_ORDER.map(k => `<div class="row" data-action="set-basemap" data-id="${k}"><span class="row-main"><b>${BASEMAPS[k].label}${S.settings.basemap === k ? ' ✓' : ''}</b><small>${BASEMAP_NOTE[k]}</small></span></div>`).join(''));
   });
   $('#btn-locate').addEventListener('click', () => {
     if (!S.pos) { toast('Waiting for GPS…'); return; }
@@ -1105,7 +1181,7 @@ function bindUI() {
   });
   $('#draw-undo').addEventListener('click', () => { S.draw.pts.pop(); updateDrawBar(); });
   $('#draw-done').addEventListener('click', finishDraw);
-  $('#draw-cancel').addEventListener('click', () => { const ed = S.draw?.editId; S.draw = null; updateDrawBar(); if (ed) openSite(ed); });
+  $('#draw-cancel').addEventListener('click', () => { const ed = S.draw?.editId || S.draw?.navFor; S.draw = null; updateDrawBar(); if (ed) openSite(ed); });
   document.querySelectorAll('#tabs button').forEach(b => b.addEventListener('click', () => showTab(b.dataset.tab)));
 }
 

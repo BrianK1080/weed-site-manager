@@ -175,3 +175,9 @@ th, td { text-align: left; padding: 6px; border-bottom: 1px solid var(--line); w
 .req-note { font-size: 13px; color: var(--muted); margin: 0 0 6px; }
 .tag { display:inline-block; font-size:11px; font-weight:700; padding:1px 6px; border-radius:8px; background:#e8eef0; color:#333; vertical-align:middle; margin-left:4px; }
 .tag.wons { background:#b71c1c; color:#fff; }
+.tag.calp { background:#fff3cd; color:#7a5600; }
+.tag.calp.prohib { background:#b71c1c; color:#fff; }
+details.report { margin: 12px 0; padding: 8px 10px; border: 1px solid #ddd; border-radius: 10px; }
+details.report summary { cursor: pointer; }
+pre.report-text { white-space: pre-wrap; font-size: 13px; background: #f4f6f4; padding: 8px; border-radius: 8px; margin: 6px 0; user-select: all; -webkit-user-select: all; }
+.nav-pt { font-size: 20px; line-height: 22px; color: #fff; text-shadow: 0 0 3px #000, 0 0 2px #000; }
