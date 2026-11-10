@@ -7,7 +7,7 @@ import { download, sitesCSV, chemicalRows, CHEM_COLS, toCSV, toGeoJSON, toKML, b
 
 /* ---------- basemaps (pluggable: add a provider here) ---------- */
 // Keep in step with VERSION in sw.js; shown under More > About so you can tell which version is running.
-const APP_VERSION = 13;
+const APP_VERSION = 14;
 
 const BASEMAPS = {
   map: { label: 'Street', layers: [{ url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', opts: { maxZoom: 21, maxNativeZoom: 19, attribution: '&copy; OpenStreetMap contributors' } }] },
@@ -1016,7 +1016,7 @@ function speciesView(id, fillResult) {
       ${sp.source ? `<dt>Source</dt><dd>${h(sp.source.name)}<br><small class="muted">Added ${h(sp.source.added || '')}${sp.source.checked ? ` · last checked ${h(sp.source.checked)}` : ''}</small></dd>` : ''}
     </dl>
     ${weedInfoHTML(sp, true)}
-    <div class="btns">${editBtn}<button data-action="tab" data-tab="more">Back</button></div>`;
+    <div class="btns">${editBtn}<button data-action="tab" data-tab="more">Back</button><button class="danger" data-action="delete-species" data-id="${id}">Delete</button></div>`;
   openSheet('Weed', html, 'tall');
 }
 
@@ -1051,7 +1051,7 @@ function speciesForm(id) {
     <div id="herb-rows">${(s.herbicides || []).map(herbRow).join('')}</div>
     <div class="btns"><button type="button" id="herb-add">+ Add herbicide</button></div>
     <div class="btns"><button class="primary" type="submit">Save</button><button type="button" data-action="${id ? 'edit-species' : 'tab'}" data-tab="more" data-id="${id || ''}">Cancel</button>
-    ${id && !S.sites.some(x => x.species_id === id) ? `<button type="button" class="danger" data-action="delete-species" data-id="${id}">Delete</button>` : ''}</div>
+    ${id ? `<button type="button" class="danger" data-action="delete-species" data-id="${id}">Delete</button>` : ''}</div>
   </form>`;
   openSheet(id ? 'Edit weed' : 'Add weed', html, 'tall');
   $('#herb-add').addEventListener('click', () => $('#herb-rows').insertAdjacentHTML('beforeend', herbRow({})));
@@ -1246,8 +1246,31 @@ async function onAction(e) {
     case 'edit-species': id ? speciesView(id) : speciesForm(''); break;
     case 'edit-species-form': speciesForm(id); break;
     case 'delete-species': {
-      if (!confirm('Delete this weed from the list?')) return;
-      await db.del('species', id); delete S.species[id]; renderMore(); break;
+      const sp = S.species[id];
+      const used = S.sites.filter(x => x.species_id === id);
+      if (!used.length) {
+        if (!confirm(`Delete ${sp.common_name} from your weed list?`)) return;
+        await db.del('species', id); delete S.species[id]; S.hidden.delete(id); renderSites(); toast('Weed deleted'); renderMore(); break;
+      }
+      // Weed has sites: move them to another weed first (e.g. merge a duplicate).
+      const same = n => (n || '').trim().toLowerCase();
+      const others = spList().filter(x => x.id !== id);
+      const dup = others.find(x => (sp.scientific_name && same(x.scientific_name) === same(sp.scientific_name)) || same(x.common_name) === same(sp.common_name));
+      openSheet(`Delete ${sp.common_name}`, `
+        <p>${used.length} site${used.length > 1 ? 's use' : ' uses'} this weed. Move ${used.length > 1 ? 'them' : 'it'} to another weed, then this one is deleted. Visits and photos move with the sites.</p>
+        <label>Move sites to <select id="merge-to">${others.map(x => `<option value="${x.id}" ${dup && x.id === dup.id ? 'selected' : ''}>${h(x.common_name)}${x.scientific_name ? ` (${h(x.scientific_name)})` : ''}</option>`).join('')}</select></label>
+        ${dup ? `<p class="small muted">"${h(dup.common_name)}" looks like the same weed, so it's selected.</p>` : ''}
+        <div class="btns"><button class="danger" data-action="merge-species" data-id="${id}">Move sites and delete</button><button data-action="edit-species" data-id="${id}">Cancel</button></div>`);
+      break;
+    }
+    case 'merge-species': {
+      const to = $('#merge-to')?.value;
+      if (!to || to === id) return;
+      const moved = S.sites.filter(x => x.species_id === id);
+      for (const site of moved) { site.species_id = to; await db.put('sites', site); }
+      const name = S.species[id].common_name;
+      await db.del('species', id); delete S.species[id]; S.hidden.delete(id);
+      renderSites(); toast(`${moved.length} site${moved.length > 1 ? 's' : ''} moved to ${S.species[to].common_name}; ${name} deleted`, 4000); renderMore(); break;
     }
   }
 }
