@@ -1,13 +1,13 @@
 // Weed Site Manager: Stage 1 app.
 import { db, uid, requestPersistence } from './db.js';
 import { SEED_SPECIES, SEED_VERSION } from './species.js';
-import { fillFromPack, packFor, isWons, declaredVic, PACK_CHECKED } from './weedpack.js';
+import { fillFromPack, packFor, isWons, declaredVic, declaredVicRegions, PACK_CHECKED } from './weedpack.js';
 import { MONTHS, siteStatus, seasonLabel, monthsText, haversine, siteLatLng, nearestOrder, fmtDist, geometrySize } from './season.js';
 import { download, sitesCSV, chemicalRows, CHEM_COLS, toCSV, toGeoJSON, toKML, backupJSON, parseBackup, stamp, localDate, localTime } from './export.js';
 
 /* ---------- basemaps (pluggable: add a provider here) ---------- */
 // Keep in step with VERSION in sw.js; shown under More > About so you can tell which version is running.
-const APP_VERSION = 14;
+const APP_VERSION = 15;
 
 const BASEMAPS = {
   map: { label: 'Street', layers: [{ url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', opts: { maxZoom: 21, maxNativeZoom: 19, attribution: '&copy; OpenStreetMap contributors' } }] },
@@ -968,7 +968,7 @@ function libraryPick(i) {
       <div class="seedbox"><b>What will be filled in</b>
         <p>${pack ? '✓ Months, methods and seed info from the weed pack' : '✗ Not in the weed pack yet: months, methods and seed info stay blank (ask Claude to research it)'}</p>
         <p>${wons ? '✓ WoNS: yes' : '✓ WoNS: not on the national list'}</p>
-        <p>${decl ? `✓ Declared status (Vic): ${CALP[decl.status]}` : '✗ Declared status (Vic): not in the app\'s table; check Agriculture Victoria\'s list'}</p>
+        <p>✓ Declared status (Vic, your region): ${CALP[decl?.status || '']}</p>
         <p>✗ Herbicides: no registered-product list in the app yet. See the <a href="${APVMA_URL}" target="_blank" rel="noopener">APVMA register (PubCRIS)</a> and the weed's profile pages.</p></div>
       <div class="btns"><button class="primary" type="submit">Add weed</button><button type="button" data-action="weed-library">Back to results</button></div>
     </form>`, 'tall');
@@ -1010,7 +1010,7 @@ function speciesView(id, fillResult) {
       <dt>Control months</dt><dd>${monthsText(sp.control_months)}</dd>
       <dt>Scouting months</dt><dd>${monthsText(sp.scouting_months || [])}</dd>
       <dt>WoNS</dt><dd>${sp.wons ? 'Yes, a Weed of National Significance' : 'No'}</dd>
-      <dt>Declared (Vic)</dt><dd>${CALP[sp.calp_status || '']}<br><small>${CALP_MEANING[sp.calp_status || '']}</small>${sp.calp_note ? `<br><small class="muted">${h(sp.calp_note)}</small>` : ''}<br><a class="small" href="${CALP_INFO_URL}" target="_blank" rel="noopener">What the categories mean</a> · <a class="small" href="${CALP_LIST_URL}" target="_blank" rel="noopener">Lists by region</a></dd>
+      <dt>Declared (Vic)</dt><dd>${CALP[sp.calp_status || '']}<br><small>${CALP_MEANING[sp.calp_status || '']}</small>${sp.calp_note ? `<br><small class="muted">${h(sp.calp_note)}</small>` : ''}${(() => { const rg = declaredVicRegions(sp.scientific_name); return rg ? `<details class="regions"><summary class="small">All Victorian regions</summary>${rg.map(x => `<div class="small${x.mine ? ' mine' : ''}">${h(x.region)}: ${CALP[x.status]}</div>`).join('')}<div class="small muted">Aug 2023 list</div></details>` : ''; })()}<a class="small" href="${CALP_INFO_URL}" target="_blank" rel="noopener">What the categories mean</a> · <a class="small" href="${CALP_LIST_URL}" target="_blank" rel="noopener">Lists by region</a></dd>
       <dt>Your sites</dt><dd>${n}</dd>
       ${sp.pack ? `<dt>Weed pack</dt><dd>Months, methods and seed info from the weed pack<br><small class="muted">Last checked ${h(sp.pack.checked)}</small></dd>` : ''}
       ${sp.source ? `<dt>Source</dt><dd>${h(sp.source.name)}<br><small class="muted">Added ${h(sp.source.added || '')}${sp.source.checked ? ` · last checked ${h(sp.source.checked)}` : ''}</small></dd>` : ''}

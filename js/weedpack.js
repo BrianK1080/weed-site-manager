@@ -2,6 +2,7 @@
 // seed info, declared status). Matched by scientific name. Months are Yarra Valley estimates;
 // the owner can edit everything in the app. Never put herbicide rates or label claims here.
 import { SEED_SPECIES } from './species.js';
+import { VIC_DECLARED, VIC_REGIONS, MY_REGION, VIC_DECLARED_SOURCE } from './declared-vic.js';
 
 export const PACK_CHECKED = '2026-11-10';
 
@@ -28,34 +29,31 @@ export function isWons(sci) {
   return WONS.some(w => w.endsWith(' ') ? n.startsWith(norm(w) + ' ') || n === norm(w) : n === norm(w) || n.startsWith(norm(w) + ' '));
 }
 
-// Victorian declared status, Port Phillip & Westernport region.
-// Sources: Agriculture Victoria noxious weeds list (20 Jul 2017), and Yarra Ranges Council
-// Roadside Weeds & Pests Program Control Plan 2017–19 (Table 1). Owner to supply the full list.
-const VIC_SRC = 'Port Phillip & Westernport, Agriculture Victoria declared weeds list (20 Jul 2017)';
-const YR_SRC = 'Yarra Ranges Council roadside weed plan 2017–19 (Port Phillip & Westernport)';
-export const DECLARED_VIC = {
-  'rubus fruticosus': ['regionally_controlled', VIC_SRC],
-  'ulex europaeus': ['regionally_controlled', VIC_SRC],
-  'hypericum perforatum': ['regionally_controlled', VIC_SRC],
-  'onopordum acanthium': ['regionally_prohibited', VIC_SRC],
-  'cirsium vulgare': ['regionally_controlled', VIC_SRC],
-  'watsonia meriana': ['regionally_controlled', 'Applies to var. bulbillifera. ' + VIC_SRC],
-  'rhaponticum repens': ['regionally_prohibited', YR_SRC],
-  'hypericum tetrapterum': ['regionally_controlled', YR_SRC],
-  'genista linifolia': ['regionally_controlled', YR_SRC],
-  'genista monspessulana': ['regionally_controlled', YR_SRC],
-  'cytisus scoparius': ['regionally_controlled', YR_SRC],
-  'asparagus asparagoides': ['restricted', YR_SRC],
-  'nassella neesiana': ['restricted', YR_SRC],
-};
-// Checked against the 2017 list and found not declared there.
-const NOT_DECLARED_VIC = ['hypochaeris radicata', 'parentucellia viscosa', 'solanum nigrum', 'arctotheca calendula'];
-
-export function declaredVic(sci) {
+// Victorian declared status: full table for all catchment regions (js/declared-vic.js, Aug 2023).
+const CODE = { S: 'state_prohibited', P: 'regionally_prohibited', C: 'regionally_controlled', R: 'restricted' };
+function vicRow(sci) {
   const n = norm(sci);
-  for (const [k, v] of Object.entries(DECLARED_VIC)) if (n === k || n.startsWith(k + ' ')) return { status: v[0], note: v[1] };
-  if (NOT_DECLARED_VIC.some(k => n === k || n.startsWith(k + ' '))) return { status: '', note: 'Not on ' + VIC_SRC };
-  return null; // unknown: not in the app's table
+  if (!n) return null;
+  if (VIC_DECLARED[n]) return VIC_DECLARED[n];
+  const parts = n.split(' ');
+  const bin = parts.slice(0, 2).join(' ');
+  if (VIC_DECLARED[bin]) return VIC_DECLARED[bin];
+  if (VIC_DECLARED[parts[0]]) return VIC_DECLARED[parts[0]]; // whole genus declared, e.g. Amsinckia
+  return null;
+}
+// Status in the owner's region, or '' if not declared in Victoria at all.
+export function declaredVic(sci) {
+  if (!norm(sci)) return null;
+  const row = vicRow(sci);
+  if (!row) return { status: '', note: `Not on Victoria's declared weeds list (${VIC_DECLARED_SOURCE})` };
+  const code = row[4][VIC_REGIONS.indexOf(MY_REGION)];
+  const extra = [row[3], row[0] !== sci && norm(row[0]) !== norm(sci) ? `listed as ${row[0]}` : ''].filter(Boolean).join('; ');
+  return { status: CODE[code] || '', note: `${MY_REGION} region. ${VIC_DECLARED_SOURCE}${extra ? '. ' + extra : ''}` };
+}
+// Status in every Victorian region, for the weed page: [{ region, status }] or null.
+export function declaredVicRegions(sci) {
+  const row = vicRow(sci);
+  return row ? VIC_REGIONS.map((r, i) => ({ region: r, status: CODE[row[4][i]] || '', mine: r === MY_REGION })) : null;
 }
 
 // Researched profiles. Keys are lower-case binomials.
@@ -138,7 +136,6 @@ export function fillFromPack(rec, { fresh = false } = {}) {
   if (empty(rec.preferred_methods)) missing.push(LABELS.preferred_methods);
   const si = rec.seed_info || {};
   for (const [k, lbl] of [['seed_set', 'seed_set'], ['seeds', 'seeds'], ['seed_bank', 'seed_bank'], ['spread', 'spread']]) if (empty(si[k])) missing.push(LABELS[lbl]);
-  if (!d) missing.push('declared status (not in the app\'s Victorian table)');
   if (empty(rec.links?.agvic)) missing.push(LABELS.agvic);
   if (empty(rec.herbicides)) missing.push('herbicides (no registered-product list in the app yet)');
   return { filled: [...new Set(filled)], missing, inPack: !!p, declaredKnown: !!d };
